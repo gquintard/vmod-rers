@@ -4,12 +4,12 @@ version = "0.0.1"
 edition = "2021"
 
 [build-dependencies]
-varnish = { path = "../varnish-rs/" }
-varnish-sys = { path = "../varnish-rs/varnish-sys" }
+varnish = "0.0.5"
+varnish-sys = "0.0.5"
 
 [dependencies]
-varnish = { path = "../varnish-rs/" }
-varnish-sys = { path = "../varnish-rs/varnish-sys" }
+varnish = "0.0.5"
+varnish-sys = "0.0.5"
 regex = "1.5"
 regex-cache = "0.2.1"
 
