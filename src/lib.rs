@@ -1,4 +1,3 @@
-#![allow(non_camel_case_types)]
 
 varnish::boilerplate!();
 
@@ -12,17 +11,18 @@ varnish::vtc!(test01);
 varnish::vtc!(test02);
 varnish::vtc!(test03);
 
-pub struct store {
+#[allow(non_camel_case_types)]
+pub struct init {
     mutexed_cache: Mutex<regex_cache::RegexCache>,
 }
 
-impl store {
+impl init {
     pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Self {
         let sz = match opt_sz {
             Some(n) if n > 0 => n,
             _ => 1000,
         };
-        store {
+        init {
             mutexed_cache: Mutex::new(regex_cache::RegexCache::new(sz as usize)),
         }
     }

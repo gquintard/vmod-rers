@@ -5,11 +5,11 @@ $Module rers 3 "Regular expressions"
 
 General note: all functions in this vmod will silently fail if given an invalid regex, which means that `.is_match()` and `.capture()` will always return false, and replace will be a noop.
 
-$Object store([INT n])
+$Object init([INT n])
 
 Build a regex store, optionally specifying its size `n` (defaults to 100). The cache is a standard LRU cache, meaning that if we try to compile/access a regex that wouldn't fit in it, it will remove the Least Recently Used regex to make space for the newcomer.
 
-$Method BOOL .is_match(STRING regex, STRING s)
+$Method BOOL .is_match(STRING s, STRING regex)
 
 Return `true` if `regex` matches on `s`
 

@@ -13,17 +13,17 @@ varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
 	import rers from "${vmod}";
 
 	sub vcl_init {
-		new re_store = rers.store(3);
+		new re_cache = rers.init(3);
 	}
 
 	sub vcl_recv {
-		set req.http.premature = re_store.group(0);
+		set req.http.premature = re_cache.group(0);
 
-		if (re_store.capture(req.url, "/([^/]*)/([^/]*)/([^/]*)")) {
-			set req.http.capture_all = re_store.group(0);
-			set req.http.capture_first = re_store.group(1);
-			set req.http.capture_second = re_store.group(2);
-			set req.http.capture_third = re_store.group(3);
+		if (re_cache.capture(req.url, "/([^/]*)/([^/]*)/([^/]*)")) {
+			set req.http.capture_all = re_cache.group(0);
+			set req.http.capture_first = re_cache.group(1);
+			set req.http.capture_second = re_cache.group(2);
+			set req.http.capture_third = re_cache.group(3);
 		}
 	}
 } -start

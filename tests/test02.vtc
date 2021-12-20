@@ -18,11 +18,11 @@ varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
 	import rers from "${vmod}";
 
 	sub vcl_init {
-		new re_store = rers.store(1);
+		new re_cache = rers.init(1);
 	}
 
 	sub vcl_recv {
-		set req.url = re_store.replace(req.url, "^/(?P<one>[^/]+)/(?P<two>[^/]+)/(?P<three>[^/]+)", "/$one/$three/$two");
+		set req.url = re_cache.replace(req.url, "^/(?P<one>[^/]+)/(?P<two>[^/]+)/(?P<three>[^/]+)", "/$one/$three/$two");
 	}
 } -start
 
