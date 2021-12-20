@@ -1,18 +1,26 @@
 # Copyright (c) 2021 Guillaume Quintard
 # Author: Guillaume Quintard <guillaume.quintard@gmail.com>
-# (vmodtool requires this format.)
 
-# We describe our vmod, all lines starting with a $ are special as they
-# are used to generate boilerplate code
-# the "example" here matches the "vmod_example" in `Cargo.toml`
-# for more information, check https://varnish-cache.org/docs/trunk/reference/vmod.html
-$Module example 3 "An example vmod"
+$Module rers 3 "Regular expressions"
 
-# this describes our function prototypse, and we can add some explanation about it underneath
-$Function BOOL is_even(INT)
+General note: all functions in this vmod will silently fail if given an invalid regex, which means that `.is_match()` and `.capture()` will always return false, and replace will be a noop.
 
-This will tell you if a number is even, isn't that odd?
+$Object store([INT n])
 
-$Function STRING captain_obvious([INT n])
+Build a regex store, optionally specifying its size `n` (defaults to 100). The cache is a standard LRU cache, meaning that if we try to compile/access a regex that wouldn't fit in it, it will remove the Least Recently Used regex to make space for the newcomer.
 
-Produce a string explaining which number you provided as argument
+$Method BOOL .is_match(STRING regex, STRING s)
+
+Return `true` if `regex` matches on `s`
+
+$Method STRING .replace(STRING s, STRING regex, STRING sub, [INT lim])
+
+Replace all groups matching `regex` in `s` with `sub`. If `lim` is specified, only the first `lim` groups are replaced.
+
+$Method BOOL .capture(PRIV_TASK, STRING string, STRING regex)
+
+Equivalent to `is_match()`, but remembers the captured groups so you can access them `group()` later on.
+
+$Method STRING .group(PRIV_TASK, INT n)
+
+Return a captured group (from `capture()`) using its index.

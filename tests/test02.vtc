@@ -1,0 +1,42 @@
+varnishtest "replace()"
+
+server s1 {
+	rxreq
+	expect req.url == "/first/third/second"
+	txresp
+
+	rxreq
+	expect req.url == "/a/c/b/d/e/f"
+	txresp
+
+	rxreq
+	expect req.url == "/first//second/third"
+	txresp
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
+	import rers from "${vmod}";
+
+	sub vcl_init {
+		new re_store = rers.store(1);
+	}
+
+	sub vcl_recv {
+		set req.url = re_store.replace(req.url, "^/(?P<one>[^/]+)/(?P<two>[^/]+)/(?P<three>[^/]+)", "/$one/$three/$two");
+	}
+} -start
+
+client c1 {
+	txreq -url "/first/second/third"
+	rxresp
+	expect resp.status == 200
+
+	txreq -url "/a/b/c/d/e/f"
+	rxresp
+	expect resp.status == 200
+
+	# double slash prevents the match
+	txreq -url "/first//second/third"
+	rxresp
+	expect resp.status == 200
+} -run
