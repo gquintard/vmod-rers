@@ -99,14 +99,16 @@ impl init {
             ctx.log(LogTag::VclError, "regex: request body isn't proper utf8");
             return Ok(false);
         }
+
+        // put the body on the heap so we can trust pointers to it
         let text = Box::new(body);
-        let ptr = text.as_ptr();
-        let len = text.len();
 
         // from_utf8_unchecked isn't unsafe, as we already checked with from_utf8(), but
         // from_raw_parts is we need rust to trust us on the lifetime of slice (which caps will
         // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
         // works
+        let ptr = text.as_ptr();
+        let len = text.len();
         let slice = unsafe { from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
         match re.captures(slice) {
             None => Ok(false),
