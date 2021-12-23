@@ -21,6 +21,11 @@ $Method BOOL .capture(PRIV_TASK, STRING string, STRING regex)
 
 Equivalent to `is_match()`, but remembers the captured groups so you can access them `group()` later on.
 
+$Method BOOL .capture_body(PRIV_TASK, STRING regex)
+
+Same as `.capture()` but works on the request body. The request must have been cached first (using `std.cache_req_body()` for example) or the call will fail and interrupt the VCL transaction.
+If the request body isn't valid utf8, the function will simply return `false`.
+
 $Method STRING .group(PRIV_TASK, INT n)
 
-Return a captured group (from `capture()`) using its index.
+Return a captured group (from `capture()` or `capture_body()`) using its index.

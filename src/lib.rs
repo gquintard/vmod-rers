@@ -1,19 +1,30 @@
-
 varnish::boilerplate!();
 
+use std::slice;
+use std::str::{from_utf8, from_utf8_unchecked};
 use std::sync::Mutex;
+
 use varnish::vcl::convert::IntoVCL;
-use varnish::vcl::ctx::Ctx;
+use varnish::vcl::ctx::{Ctx, LogTag};
 use varnish::vcl::vpriv::VPriv;
 use varnish_sys::VCL_STRING;
 
 varnish::vtc!(test01);
 varnish::vtc!(test02);
 varnish::vtc!(test03);
+varnish::vtc!(test04);
 
 #[allow(non_camel_case_types)]
 pub struct init {
     mutexed_cache: Mutex<regex_cache::RegexCache>,
+}
+
+pub struct Captures<'a> {
+    caps: regex::Captures<'a>,
+    #[allow(dead_code)]
+    text: Option<Box<Vec<u8>>>,
+    #[allow(dead_code)]
+    slice: Option<&'a str>,
 }
 
 impl init {
@@ -61,10 +72,59 @@ impl init {
         }
     }
 
+    pub fn capture_body<'a>(
+        &self,
+        ctx: &mut Ctx,
+        vp: &mut VPriv<Captures<'a>>,
+        res: &str,
+    ) -> Result<bool, String> {
+        vp.clear();
+
+        let re = match self.get_regex(res) {
+            Err(_) => return Ok(false),
+            Ok(re) => re.clone(),
+        };
+
+        // we need a contiguous buffer to present to the regex, so we coalesce the cached body
+        let body = ctx
+            .cached_req_body()?
+            .into_iter()
+            .fold(Vec::new(), |mut v, b| {
+                v.extend_from_slice(b);
+                v
+            });
+
+        // make sure it's valid UTF8
+        if from_utf8(body.as_slice()).is_err() {
+            ctx.log(LogTag::VclError, "regex: request body isn't proper utf8");
+            return Ok(false);
+        }
+        let text = Box::new(body);
+        let ptr = text.as_ptr();
+        let len = text.len();
+
+        // from_utf8_unchecked isn't unsafe, as we already checked with from_utf8(), but
+        // from_raw_parts is we need rust to trust us on the lifetime of slice (which caps will
+        // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
+        // works
+        let slice = unsafe { from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
+        match re.captures(slice) {
+            None => Ok(false),
+            Some(caps) => {
+                vp.store(Captures {
+                    caps,
+                    text: Some(text),
+                    slice: Some(slice),
+                });
+                Ok(true)
+            }
+        }
+    }
+
     pub fn capture<'a>(
         &self,
         _: &mut Ctx,
-        vp: &mut VPriv<regex::Captures<'a>>,
+        vp: &mut VPriv<Captures<'a>>,
         s: &'a str,
         res: &str,
     ) -> bool {
@@ -75,23 +135,22 @@ impl init {
             Ok(re) => re.clone(),
         };
 
-        let cap = match re.captures(s) {
+        let caps = match re.captures(s) {
             None => return false,
-            Some(cap) => cap,
+            Some(caps) => caps,
         };
-        vp.store(cap);
+        vp.store(Captures {
+            caps,
+            text: None,
+            slice: None,
+        });
         true
     }
 
-    pub fn group<'a, 'b: 'a>(
-        &self,
-        _: &mut Ctx,
-        vp: &mut VPriv<regex::Captures<'b>>,
-        n: i64,
-    ) -> &'a str {
+    pub fn group<'a>(&self, _: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> &'a str {
         let n = if n >= 0 { n } else { 0 } as usize;
         vp.as_ref()
-            .and_then(|cap| cap.get(n))
+            .and_then(|c| c.caps.get(n))
             .map(|m| m.as_str())
             .unwrap_or("")
     }
