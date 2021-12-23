@@ -331,7 +331,7 @@ checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "varnish"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "pkg-config",
  "varnish-sys",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "varnish-sys"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "bindgen",
  "pkg-config",

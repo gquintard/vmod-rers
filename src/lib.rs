@@ -13,6 +13,7 @@ varnish::vtc!(test01);
 varnish::vtc!(test02);
 varnish::vtc!(test03);
 varnish::vtc!(test04);
+varnish::vtc!(test05);
 
 #[allow(non_camel_case_types)]
 pub struct init {
@@ -151,9 +152,10 @@ impl init {
 
     pub fn group<'a>(&self, _: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> &'a str {
         let n = if n >= 0 { n } else { 0 } as usize;
-        vp.as_ref()
-            .and_then(|c| c.caps.get(n))
-            .map(|m| m.as_str())
-            .unwrap_or("")
+        vp.as_ref().and_then(|c| c.caps.get(n)).map(|m| m.as_str()).unwrap_or("")
+    }
+
+    pub fn named_group<'a>(&self, _: &mut Ctx, vp: &mut VPriv<Captures<'a>>, name: &str) -> &'a str {
+        vp.as_ref().and_then(|c| c.caps.name(name)).map(|m| m.as_str()).unwrap_or("")
     }
 }
