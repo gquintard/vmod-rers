@@ -1,0 +1,35 @@
+varnishtest "capture_body() and group()"
+
+server s1 {
+	rxreq
+	txresp
+	expect req.http.capture_first == first
+	expect req.http.capture_second == second
+	expect req.http.capture_third == third
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
+import std;
+	import rers from "${vmod}";
+
+	sub vcl_init {
+		new re_cache = rers.init(3);
+	}
+
+	sub vcl_recv {
+		std.cache_req_body(100B);
+
+		if (re_cache.capture_body("/([^/]*)/([^/]*)/([^/]*)")) {
+			set req.http.capture_all = re_cache.group(0);
+			set req.http.capture_first = re_cache.group(1);
+			set req.http.capture_second = re_cache.group(2);
+			set req.http.capture_third = re_cache.group(3);
+		}
+	}
+} -start
+
+client c1 {
+	txreq -body "/first/second/third"
+	rxresp
+	expect resp.status == 200
+} -run
