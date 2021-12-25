@@ -245,8 +245,7 @@ impl OutProc for DeliveryReplacer {
             // if it's not a proper string, bailout
             let mut replaced_body = Cow::from(&self.body);
             for (re, sub) in &self.steps {
-                // ignore the case where the resulting `String` is `Cow::Borrowed`, it means
-                // nothing changed
+                // ignore the `Cow::Borrowed` case, it means nothing changed
                 if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
                     replaced_body = Cow::from(s);
                 }
