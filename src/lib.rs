@@ -1,10 +1,16 @@
 varnish::boilerplate!();
 
 use std::borrow::Cow;
+use std::cmp::max;
 use std::os::raw::c_void;
+use std::ptr;
 use std::slice;
 use std::str::{from_utf8, from_utf8_unchecked};
 use std::sync::Mutex;
+use std::io::Write;
+
+use lru::LruCache;
+use regex::bytes::Regex;
 
 use varnish::vcl::convert::IntoVCL;
 use varnish::vcl::ctx::{Ctx, Event, LogTag, TestCtx};
@@ -21,48 +27,44 @@ varnish::vtc!(test06);
 
 #[allow(non_camel_case_types)]
 pub struct init {
-    mutexed_cache: Mutex<regex_cache::RegexCache>,
+    mutexed_cache: Mutex<LruCache<String, Result<Regex, String>>>,
 }
 
 const PRIV_ANCHOR: [u8; 1] = [0];
 
 struct ReplaceSteps {
-    v: Vec<(regex_cache::Regex, String)>,
+    v: Vec<(Regex, String)>,
 }
 
 pub struct Captures<'a> {
-    caps: regex::Captures<'a>,
+    caps: regex::bytes::Captures<'a>,
     #[allow(dead_code)]
     text: Option<Box<Vec<u8>>>,
     #[allow(dead_code)]
-    slice: Option<&'a str>,
+    slice: Option<&'a [u8]>,
 }
 
 impl init {
     pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Self {
-        let sz = match opt_sz {
-            Some(n) if n > 0 => n,
-            _ => 1000,
-        };
+        let sz = max(0, opt_sz.unwrap_or(1000));
         init {
-            mutexed_cache: Mutex::new(regex_cache::RegexCache::new(sz as usize)),
+            mutexed_cache: Mutex::new(LruCache::new(sz as usize)),
         }
     }
 
-    fn get_regex(&self, res: &str) -> Result<regex_cache::Regex, String> {
-        self.mutexed_cache
-            .lock()
-            .unwrap()
-            .compile(res)
-            .map(|re| re.clone())
-            .map_err(|e| e.to_string())
+    fn get_regex(&self, res: &str) -> Result<Regex, String> {
+        let mut lru = self.mutexed_cache.lock().unwrap();
+        if lru.get(res).is_none() {
+            let comp = Regex::new(res).map_err(|e| e.to_string());
+            lru.put(res.to_string(), comp);
+        }
+        lru.get(res).unwrap().clone()
     }
 
     pub fn is_match(&self, _: &mut Ctx, s: &str, res: &str) -> bool {
-        match self.get_regex(res) {
-            Err(_) => false,
-            Ok(re) => re.is_match(s),
-        }
+        self.get_regex(res)
+            .map(|re| re.is_match(s.as_bytes()))
+            .unwrap_or(false)
     }
 
     pub fn replace(
@@ -73,13 +75,14 @@ impl init {
         sub: &str,
         opt_lim: Option<i64>,
     ) -> Result<VCL_STRING, String> {
-        let lim = match opt_lim {
-            Some(n) if n >= 0 => n,
-            _ => 0,
-        };
+        let lim = max(0, opt_lim.unwrap_or(0));
         match self.get_regex(res) {
             Err(_) => s.into_vcl(&mut ctx.ws),
-            Ok(re) => Ok(re.replacen(s, lim as usize, sub).into_vcl(&mut ctx.ws)?),
+            Ok(re) => {
+                let replaced = re.replacen(s.as_bytes(), lim as usize, sub.as_bytes());
+                let buf = ctx.ws.copy_bytes_with_null(&replaced)?;
+                Ok(buf.as_ptr() as VCL_STRING)
+            },
         }
     }
 
@@ -93,7 +96,7 @@ impl init {
 
         let re = match self.get_regex(res) {
             Err(_) => return Ok(false),
-            Ok(re) => re.clone(),
+            Ok(re) => re,
         };
 
         // we need a contiguous buffer to present to the regex, so we coalesce the cached body
@@ -115,12 +118,12 @@ impl init {
         let text = Box::new(body);
 
         // from_utf8_unchecked isn't unsafe, as we already checked with from_utf8(), but
-        // from_raw_parts is we need rust to trust us on the lifetime of slice (which caps will
+        // from_raw_parts is; we need rust to trust us on the lifetime of slice (which caps will
         // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
         // works
         let ptr = text.as_ptr();
         let len = text.len();
-        let slice = unsafe { from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
+        let slice = unsafe { slice::from_raw_parts(ptr, len) };
         match re.captures(slice) {
             None => Ok(false),
             Some(caps) => {
@@ -145,10 +148,10 @@ impl init {
 
         let re = match self.get_regex(res) {
             Err(_) => return false,
-            Ok(re) => re.clone(),
+            Ok(re) => re,
         };
 
-        let caps = match re.captures(s) {
+        let caps = match re.captures(s.as_bytes()) {
             None => return false,
             Some(caps) => caps,
         };
@@ -160,24 +163,26 @@ impl init {
         true
     }
 
-    pub fn group<'a>(&self, _: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> &'a str {
+    pub fn group<'a>(&self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> Result<VCL_STRING, String> {
         let n = if n >= 0 { n } else { 0 } as usize;
-        vp.as_ref()
-            .and_then(|c| c.caps.get(n))
-            .map(|m| m.as_str())
-            .unwrap_or("")
+        let cap_opt = vp.as_ref().and_then(|c| c.caps.get(n));
+        if cap_opt.is_none() {
+            return Ok(ptr::null());
+        }
+        Ok(ctx.ws.copy_bytes_with_null(&cap_opt.unwrap().as_bytes())?.as_ptr() as VCL_STRING)
     }
 
     pub fn named_group<'a>(
         &self,
-        _: &mut Ctx,
+        ctx: &mut Ctx,
         vp: &mut VPriv<Captures<'a>>,
         name: &str,
-    ) -> &'a str {
-        vp.as_ref()
-            .and_then(|c| c.caps.name(name))
-            .map(|m| m.as_str())
-            .unwrap_or("")
+    ) -> Result<VCL_STRING, String> {
+        let cap_opt = vp.as_ref().and_then(|c| c.caps.name(name));
+        if cap_opt.is_none() {
+            return Ok(ptr::null());
+        }
+        Ok(ctx.ws.copy_bytes_with_null(&cap_opt.unwrap().as_bytes())?.as_ptr() as VCL_STRING)
     }
 
     pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
@@ -188,13 +193,14 @@ impl init {
             }
             Ok(re) => re,
         };
-        //TODO: check for VRT_priv_task failure
-        let mut vp: VPriv<ReplaceSteps> = unsafe {
-            VPriv::new(varnish_sys::VRT_priv_task(
-                ctx.raw,
-                PRIV_ANCHOR.as_ptr() as *const c_void,
-            ))
+        let priv_opt = unsafe {
+            varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR.as_ptr() as *const c_void).as_mut()
         };
+        if priv_opt.is_none() {
+            ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
+            return ();
+        }
+        let mut vp: VPriv<ReplaceSteps> = VPriv::new(priv_opt.unwrap());
         if let Some(ri) = vp.as_mut() {
             ri.v.push((re, sub.to_owned()));
         } else {
@@ -208,15 +214,15 @@ impl init {
 
 #[derive(Default)]
 struct DeliveryReplacer {
-    steps: Vec<(regex_cache::Regex, String)>,
+    steps: Vec<(Regex, String)>,
     body: Vec<u8>,
 }
 
 impl OutProc for DeliveryReplacer {
-    fn new(ctx: &mut OutCtx, _oc: *mut varnish_sys::objcore) -> Result<Self, String> {
-        let priv_opt;
+    fn new(ctx: &mut OutCtx, _oc: *mut varnish_sys::objcore) -> Option<Self> {
+        let privp;
         // we don't know how/if the body will be modified, so we nuke the content-length
-        // it's also no worth fleshing out a rust object just to remove a header, use the C function
+        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             let req = ctx.raw.req.as_ref().unwrap();
             assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
@@ -225,25 +231,21 @@ impl OutProc for DeliveryReplacer {
             // the lying! the cheating!
             let mut fake_ctx = TestCtx::new(0);
             fake_ctx.ctx().raw.req = ctx.raw.req;
-            priv_opt = varnish_sys::VRT_priv_task_get(
+            privp = varnish_sys::VRT_priv_task_get(
                 fake_ctx.ctx().raw,
                 PRIV_ANCHOR.as_ptr() as *const c_void,
             )
-            .as_mut()
+            .as_mut()?;
         }
 
-        if let Some(privp) = priv_opt {
-            let mut vp: VPriv<ReplaceSteps> = VPriv::new(privp);
-            Ok(DeliveryReplacer {
-                steps: match vp.take() {
-                    Some(mut rs) => std::mem::take(&mut rs.v),
-                    None => Vec::new(),
-                },
-                body: Vec::new(),
-            })
-        } else {
-            return Ok(Default::default());
-        }
+        let mut vp: VPriv<ReplaceSteps> = VPriv::new(privp);
+        Some(DeliveryReplacer {
+            steps: match vp.take() {
+                Some(mut rs) => std::mem::take(&mut rs.v),
+                None => Vec::new(),
+            },
+            body: Vec::new(),
+        })
     }
 
     fn bytes(&mut self, ctx: &mut OutCtx, act: OutAction, buf: &[u8]) -> OutResult {
@@ -251,22 +253,15 @@ impl OutProc for DeliveryReplacer {
 
         if let OutAction::End = act {
             // if it's not a proper string, bailout
-            let str_body = match from_utf8(self.body.as_slice()) {
-                Err(_) => {
-                    // TODO: log error
-                    return ctx.push_bytes(act, self.body.as_slice());
-                }
-                Ok(s) => s,
-            };
-            let mut replaced_body = Cow::from(str_body);
+            let mut replaced_body = Cow::from(&self.body);
             for (re, sub) in &self.steps {
                 // ignore the case where the resulting `String` is `Cow::Borrowed`, it means
                 // nothing changed
-                if let Cow::Owned(s) = re.replace(&replaced_body, sub) {
+                if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
                     replaced_body = Cow::from(s);
                 }
             }
-            ctx.push_bytes(act, replaced_body.as_bytes())
+            ctx.push_bytes(act, &replaced_body)
         } else {
             OutResult::Continue
         }
