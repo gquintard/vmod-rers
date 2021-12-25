@@ -241,19 +241,17 @@ impl OutProc for DeliveryReplacer {
     fn bytes(&mut self, ctx: &mut OutCtx, act: OutAction, buf: &[u8]) -> OutResult {
         self.body.extend_from_slice(buf);
 
-        if let OutAction::End = act {
-            // if it's not a proper string, bailout
-            let mut replaced_body = Cow::from(&self.body);
-            for (re, sub) in &self.steps {
-                // ignore the `Cow::Borrowed` case, it means nothing changed
-                if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
-                    replaced_body = Cow::from(s);
-                }
-            }
-            ctx.push_bytes(act, &replaced_body)
-        } else {
-            OutResult::Continue
+        if !matches!(act, OutAction::End) {
+            return OutResult::Continue;
         }
+        let mut replaced_body = Cow::from(&self.body);
+        for (re, sub) in &self.steps {
+            // ignore the `Cow::Borrowed` case, it means nothing changed
+            if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
+                replaced_body = Cow::from(s);
+            }
+        }
+        ctx.push_bytes(act, &replaced_body)
     }
 
     fn name() -> &'static str {
