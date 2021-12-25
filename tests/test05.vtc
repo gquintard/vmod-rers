@@ -1,4 +1,4 @@
-varnishtest "capture_body() and group()"
+varnishtest "capture_req_body() and group()"
 
 server s1 {
 	rxreq

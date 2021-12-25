@@ -1,4 +1,4 @@
-varnishtest "capture_body() and group()"
+varnishtest "capture_req_body() and group()"
 
 server s1 {
 	rxreq
@@ -19,7 +19,7 @@ import std;
 	sub vcl_recv {
 		std.cache_req_body(100B);
 
-		if (re_cache.capture_body("/([^/]*)/([^/]*)/([^/]*)")) {
+		if (re_cache.capture_req_body("/([^/]*)/([^/]*)/([^/]*)")) {
 			set req.http.capture_all = re_cache.group(0);
 			set req.http.capture_first = re_cache.group(1);
 			set req.http.capture_second = re_cache.group(2);
