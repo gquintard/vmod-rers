@@ -150,27 +150,12 @@ impl init {
         true
     }
 
-    pub fn group<'a>(&self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> Result<VCL_STRING, String> {
+    pub fn group<'a>(&self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> Option<&'a [u8]> {
         let n = if n >= 0 { n } else { 0 } as usize;
-        let cap_opt = vp.as_ref().and_then(|c| c.caps.get(n));
-        if cap_opt.is_none() {
-            return Ok(ptr::null());
-        }
-        Ok(ctx.ws.copy_bytes_with_null(&cap_opt.unwrap().as_bytes())?.as_ptr() as VCL_STRING)
+        vp.as_ref().and_then(|c| c.caps.get(n)).map(|m| m.as_bytes())
     }
 
-    pub fn named_group<'a>(
-        &self,
-        ctx: &mut Ctx,
-        vp: &mut VPriv<Captures<'a>>,
-        name: &str,
-    ) -> Result<VCL_STRING, String> {
-        let cap_opt = vp.as_ref().and_then(|c| c.caps.name(name));
-        if cap_opt.is_none() {
-            return Ok(ptr::null());
-        }
-        Ok(ctx.ws.copy_bytes_with_null(&cap_opt.unwrap().as_bytes())?.as_ptr() as VCL_STRING)
-    }
+    pub fn named_group<'a>( &self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, name: &str,) -> Option<&'a [u8]> { vp.as_ref().and_then(|c| c.caps.name(name)).map(|m| m.as_bytes()) }
 
     pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
         let re = match self.get_regex(res) {
