@@ -32,10 +32,6 @@ pub struct init {
 
 const PRIV_ANCHOR: [u8; 1] = [0];
 
-struct ReplaceSteps {
-    v: Vec<(Regex, String)>,
-}
-
 pub struct Captures<'a> {
     caps: regex::bytes::Captures<'a>,
     #[allow(dead_code)]
@@ -200,12 +196,13 @@ impl init {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
             return ();
         }
-        let mut vp: VPriv<ReplaceSteps> = VPriv::new(priv_opt.unwrap());
+        let mut vp: VPriv<DeliveryReplacer> = VPriv::new(priv_opt.unwrap());
         if let Some(ri) = vp.as_mut() {
-            ri.v.push((re, sub.to_owned()));
+            ri.steps.push((re, sub.to_owned()));
         } else {
-            let ri = ReplaceSteps {
-                v: vec![(re, sub.to_owned())],
+            let ri = DeliveryReplacer {
+                body: Vec::new(),
+                steps: vec![(re, sub.to_owned())],
             };
             vp.store(ri);
         }
@@ -238,14 +235,7 @@ impl OutProc for DeliveryReplacer {
             .as_mut()?;
         }
 
-        let mut vp: VPriv<ReplaceSteps> = VPriv::new(privp);
-        Some(DeliveryReplacer {
-            steps: match vp.take() {
-                Some(mut rs) => std::mem::take(&mut rs.v),
-                None => Vec::new(),
-            },
-            body: Vec::new(),
-        })
+        VPriv::new(privp).take()
     }
 
     fn bytes(&mut self, ctx: &mut OutCtx, act: OutAction, buf: &[u8]) -> OutResult {
