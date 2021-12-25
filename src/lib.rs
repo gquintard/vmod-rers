@@ -5,9 +5,7 @@ use std::cmp::max;
 use std::os::raw::c_void;
 use std::ptr;
 use std::slice;
-use std::str::{from_utf8, from_utf8_unchecked};
 use std::sync::Mutex;
-use std::io::Write;
 
 use lru::LruCache;
 use regex::bytes::Regex;
@@ -104,17 +102,10 @@ impl init {
                 v
             });
 
-        // make sure it's valid UTF8
-        if from_utf8(body.as_slice()).is_err() {
-            ctx.log(LogTag::VclError, "regex: request body isn't proper utf8");
-            return Ok(false);
-        }
-
         // put the body on the heap so we can trust pointers to it
         let text = Box::new(body);
 
-        // from_utf8_unchecked isn't unsafe, as we already checked with from_utf8(), but
-        // from_raw_parts is; we need rust to trust us on the lifetime of slice (which caps will
+        // we need rust to trust us on the lifetime of slice (which caps will
         // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
         // works
         let ptr = text.as_ptr();
