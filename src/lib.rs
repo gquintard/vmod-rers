@@ -3,7 +3,6 @@ varnish::boilerplate!();
 use std::borrow::Cow;
 use std::cmp::max;
 use std::os::raw::c_void;
-use std::ptr;
 use std::slice;
 use std::sync::Mutex;
 
@@ -12,7 +11,7 @@ use regex::bytes::Regex;
 
 use varnish::vcl::convert::IntoVCL;
 use varnish::vcl::ctx::{Ctx, Event, LogTag, TestCtx};
-use varnish::vcl::processor::{new_vdp, OutAction, OutCtx, OutProc, OutResult};
+use varnish::vcl::processor::{new_vdp, InitResult, PushAction, PushResult, VDPCtx, VDP};
 use varnish::vcl::vpriv::VPriv;
 use varnish_sys::VCL_STRING;
 
@@ -76,7 +75,7 @@ impl init {
                 let replaced = re.replacen(s.as_bytes(), lim as usize, sub.as_bytes());
                 let buf = ctx.ws.copy_bytes_with_null(&replaced)?;
                 Ok(buf.as_ptr() as VCL_STRING)
-            },
+            }
         }
     }
 
@@ -150,12 +149,28 @@ impl init {
         true
     }
 
-    pub fn group<'a>(&self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, n: i64) -> Option<&'a [u8]> {
+    pub fn group<'a>(
+        &self,
+        _ctx: &mut Ctx,
+        vp: &mut VPriv<Captures<'a>>,
+        n: i64,
+    ) -> Option<&'a [u8]> {
         let n = if n >= 0 { n } else { 0 } as usize;
-        vp.as_ref().and_then(|c| c.caps.get(n)).map(|m| m.as_bytes())
+        vp.as_ref()
+            .and_then(|c| c.caps.get(n))
+            .map(|m| m.as_bytes())
     }
 
-    pub fn named_group<'a>( &self, ctx: &mut Ctx, vp: &mut VPriv<Captures<'a>>, name: &str,) -> Option<&'a [u8]> { vp.as_ref().and_then(|c| c.caps.name(name)).map(|m| m.as_bytes()) }
+    pub fn named_group<'a>(
+        &self,
+        _ctx: &mut Ctx,
+        vp: &mut VPriv<Captures<'a>>,
+        name: &str,
+    ) -> Option<&'a [u8]> {
+        vp.as_ref()
+            .and_then(|c| c.caps.name(name))
+            .map(|m| m.as_bytes())
+    }
 
     pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
         let re = match self.get_regex(res) {
@@ -191,9 +206,9 @@ struct DeliveryReplacer {
     body: Vec<u8>,
 }
 
-impl OutProc for DeliveryReplacer {
-    fn new(ctx: &mut OutCtx, _oc: *mut varnish_sys::objcore) -> Option<Self> {
-        let privp;
+impl VDP for DeliveryReplacer {
+    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<DeliveryReplacer> {
+        let priv_opt;
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
@@ -204,21 +219,25 @@ impl OutProc for DeliveryReplacer {
             // the lying! the cheating!
             let mut fake_ctx = TestCtx::new(0);
             fake_ctx.ctx().raw.req = ctx.raw.req;
-            privp = varnish_sys::VRT_priv_task_get(
+            priv_opt = varnish_sys::VRT_priv_task_get(
                 fake_ctx.ctx().raw,
                 PRIV_ANCHOR.as_ptr() as *const c_void,
             )
-            .as_mut()?;
+            .as_mut()
+            .and_then(|p| VPriv::new(p).take());
         }
 
-        VPriv::new(privp).take()
+        match priv_opt {
+            None => InitResult::Pass,
+            Some(p) => InitResult::Ok(p),
+        }
     }
 
-    fn bytes(&mut self, ctx: &mut OutCtx, act: OutAction, buf: &[u8]) -> OutResult {
+    fn push(&mut self, ctx: &mut VDPCtx, act: PushAction, buf: &[u8]) -> PushResult {
         self.body.extend_from_slice(buf);
 
-        if !matches!(act, OutAction::End) {
-            return OutResult::Continue;
+        if !matches!(act, PushAction::End) {
+            return PushResult::Ok;
         }
         let mut replaced_body = Cow::from(&self.body);
         for (re, sub) in &self.steps {
@@ -227,7 +246,7 @@ impl OutProc for DeliveryReplacer {
                 replaced_body = Cow::from(s);
             }
         }
-        ctx.push_bytes(act, &replaced_body)
+        ctx.push(act, &replaced_body)
     }
 
     fn name() -> &'static str {
