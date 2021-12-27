@@ -1,15 +1,20 @@
-# Copyright (c) 2021 Guillaume Quintard
-# Author: Guillaume Quintard <guillaume.quintard@gmail.com>
+# Copyright (c) 2021 Guillaume Quintard Author: Guillaume Quintard
+# <guillaume.quintard@gmail.com>
 
 $Module rers 3 "Regular expressions"
 
 $Event event_function
 
-General note: all functions in this vmod will silently fail if given an invalid regex, which means that `.is_match()` and `.capture()` will always return false, and replace will be a noop.
+General note: all functions in this vmod will silently fail if given an invalid
+regex, which means that `.is_match()` and `.capture()` will always return false,
+and replace will be a noop.
 
 $Object init([INT n])
 
-Build a regex store, optionally specifying its size `n` (defaults to 100). The cache is a standard LRU cache, meaning that if we try to compile/access a regex that wouldn't fit in it, it will remove the Least Recently Used regex to make space for the newcomer.
+Build a regex store, optionally specifying its size `n` (defaults to 100). The
+cache is a standard LRU cache, meaning that if we try to compile/access a regex
+that wouldn't fit in it, it will remove the Least Recently Used regex to make
+space for the newcomer.
 
 $Method BOOL .is_match(STRING s, STRING regex)
 
@@ -17,20 +22,31 @@ Return `true` if `regex` matches on `s`
 
 $Method STRING .replace(STRING s, STRING regex, STRING sub, [INT lim])
 
-Replace all groups matching `regex` in `s` with `sub`. If `lim` is specified, only the first `lim` groups are replaced.
+Replace all groups matching `regex` in `s` with `sub`. If `lim` is specified,
+only the first `lim` groups are replaced.
 
 $Method BOOL .capture(PRIV_TASK, STRING string, STRING regex)
 
-Equivalent to `is_match()`, but remembers the captured groups so you can access them `group()` later on.
+Equivalent to `is_match()`, but remembers the captured groups so you can access
+them `group()` later on.
 
 $Method BOOL .capture_req_body(PRIV_TASK, STRING regex)
 
-Same as `.capture()` but works on the request body. The request must have been cached first (using `std.cache_req_body()` for example) or the call will fail and interrupt the VCL transaction.
-If the request body isn't valid utf8, the function will simply return `false`.
+Same as `.capture()` but works on the request body. The request must have been
+cached first (using `std.cache_req_body()` for example) or the call will fail
+and interrupt the VCL transaction. If the request body isn't valid utf8, the
+function will simply return `false`.
 
 $Method STRING .group(PRIV_TASK, INT index)
 $Method STRING .named_group(PRIV_TASK, STRING name)
 
-Return a captured group (from `capture()` or `capture_req_body()`) using its `index` or its `name`. Trying to access an non-existing group will return an empty string.
+Return a captured group (from `capture()` or `capture_req_body()`) using its
+`index` or its `name`. Trying to access an non-existing group will return an
+empty string.
 
-$Method VOID .replace_resp_body(STRING s, STRING regex)
+$Method VOID .replace_resp_body(STRING regex, STRING s)
+
+Add a regex/substitute pair to use when delivering the response body to a
+client. Note that you will need to include `rers` in `resp.filters` for it to
+have an effect. This function can be called multiple times, with each pair being
+called sequentially.
