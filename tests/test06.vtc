@@ -16,15 +16,15 @@ varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
 	}
 
 	sub vcl_recv {
+		return (pass);
+	}
+
+	sub vcl_deliver {
 		re_cache.replace_resp_body("1", "A");
 		re_cache.replace_resp_body("567.", "EFG|");
 		re_cache.replace_resp_body("f", "X");
 		re_cache.replace_resp_body("e", "Y");
 		re_cache.replace_resp_body("d", "Z");
-		return (pass);
-	}
-
-	sub vcl_deliver {
 		set resp.filters = "rers";
 	}
 } -start
