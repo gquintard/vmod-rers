@@ -4,12 +4,12 @@ version = "0.0.2"
 edition = "2021"
 
 [build-dependencies]
-varnish = "0.0.7"
-varnish-sys = "0.0.7"
+varnish = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
+varnish-sys = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
 
 [dependencies]
-varnish = "0.0.7"
-varnish-sys = "0.0.7"
+varnish = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
+varnish-sys = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
 regex = "1.5"
 lru = "0.7.1"
 

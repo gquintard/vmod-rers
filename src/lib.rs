@@ -11,7 +11,7 @@ use regex::bytes::Regex;
 
 use varnish::vcl::convert::IntoVCL;
 use varnish::vcl::ctx::{Ctx, Event, LogTag, TestCtx};
-use varnish::vcl::processor::{new_vdp, InitResult, PushAction, PushResult, VDPCtx, VDP};
+use varnish::vcl::processor::{new_vdp, InitResult, PushAction, PushResult, VDPCtx, VDP, VFP, VFPCtx, PullResult, new_vfp};
 use varnish::vcl::vpriv::VPriv;
 use varnish_sys::VCL_STRING;
 
@@ -21,6 +21,7 @@ varnish::vtc!(test03);
 varnish::vtc!(test04);
 varnish::vtc!(test05);
 varnish::vtc!(test06);
+varnish::vtc!(test07);
 
 #[allow(non_camel_case_types)]
 pub struct init {
@@ -187,27 +188,34 @@ impl init {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
             return ();
         }
-        let mut vp: VPriv<DeliveryReplacer> = VPriv::new(priv_opt.unwrap());
+        let mut vp: VPriv<VXP> = VPriv::new(priv_opt.unwrap());
         if let Some(ri) = vp.as_mut() {
             ri.steps.push((re, sub.to_owned()));
         } else {
-            let ri = DeliveryReplacer {
+            let ri = VXP {
                 body: Vec::new(),
                 steps: vec![(re, sub.to_owned())],
+                sent: None,
             };
             vp.store(ri);
         }
     }
 }
 
-#[derive(Default)]
-struct DeliveryReplacer {
-    steps: Vec<(Regex, String)>,
-    body: Vec<u8>,
+// cheat: this is not exposed, but we know it exists
+extern "C" {
+    pub fn THR_GetBusyobj() -> *mut varnish_sys::busyobj ;
 }
 
-impl VDP for DeliveryReplacer {
-    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<DeliveryReplacer> {
+#[derive(Default)]
+struct VXP {
+    steps: Vec<(Regex, String)>,
+    body: Vec<u8>,
+    sent: Option<usize>,
+}
+
+impl VDP for VXP {
+    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
         let priv_opt;
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
@@ -254,17 +262,89 @@ impl VDP for DeliveryReplacer {
     }
 }
 
+impl VFP for VXP {
+    fn new(ctx: &mut VFPCtx) -> InitResult<Self> {
+        let priv_opt;
+        // we don't know how/if the body will be modified, so we nuke the content-length
+        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
+        unsafe {
+            varnish_sys::http_Unset(ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
+
+            // the lying! the cheating! AGAIN!!
+            let mut fake_ctx = TestCtx::new(0);
+            let bo = THR_GetBusyobj().as_mut().unwrap();
+            fake_ctx.ctx().raw.bo = bo;
+            priv_opt = varnish_sys::VRT_priv_task_get(
+                fake_ctx.ctx().raw,
+                PRIV_ANCHOR.as_ptr() as *const c_void,
+            )
+            .as_mut()
+            .and_then(|p| VPriv::new(p).take());
+        }
+
+        match priv_opt {
+            None => InitResult::Pass,
+            Some(p) => InitResult::Ok(p),
+        }
+    }
+
+    fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
+        // first pull everything, using buf to receive the initial data before extending our body vector
+        while let None = self.sent {
+            match ctx.pull(buf) {
+                PullResult::Err => return PullResult::Err,
+                PullResult::Ok(sz) => self.body.extend_from_slice(&buf[..sz]),
+                PullResult::End(sz) => {
+                    self.body.extend_from_slice(&buf[..sz]);
+                    // same trick as for VDP, we run all our regex, but this time we'll revert the
+                    // body back into a vector for the next times we are called
+                    let mut replaced_body = Cow::from(&self.body);
+                    for (re, sub) in &self.steps {
+                        // ignore the `Cow::Borrowed` case, it means nothing changed
+                        if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
+                            replaced_body = Cow::from(s);
+                        }
+                    }
+                    self.body = replaced_body.into_owned();
+                    self.sent = Some(0);
+                },
+            }
+        }
+        // the body is completely in memory and fully transformed, we just need to copy whatever we
+        // can into buf, and keep track of the data already transferred
+        let mut out = self.sent.unwrap();
+        assert!(out <= self.body.len());
+        let len = std::cmp::min(buf.len(), self.body.len() - out);
+        buf[..len].copy_from_slice(&self.body[out..(out+len)]);
+        out += len;
+        self.sent = Some(out);
+        if out == self.body.len() {
+            PullResult::End(len)
+        } else {
+            PullResult::Ok(len)
+        }
+    }
+
+    fn name() -> &'static str {
+        "rers\0"
+    }
+}
+
 pub unsafe fn event(
     ctx: &mut Ctx,
-    vp: &mut VPriv<varnish_sys::vdp>,
+    vp: &mut VPriv<(varnish_sys::vdp, varnish_sys::vfp)>,
     event: Event,
 ) -> Result<(), &'static str> {
     match event {
         Event::Load => {
-            vp.store(new_vdp::<DeliveryReplacer>());
-            varnish_sys::VRT_AddVDP(ctx.raw, vp.as_ref().unwrap())
+            vp.store((new_vdp::<VXP>(), new_vfp::<VXP>()));
+            varnish_sys::VRT_AddVDP(ctx.raw, &vp.as_ref().unwrap().0);
+            varnish_sys::VRT_AddVFP(ctx.raw, &vp.as_ref().unwrap().1);
         }
-        Event::Discard => varnish_sys::VRT_RemoveVDP(ctx.raw, vp.as_ref().unwrap()),
+        Event::Discard => {
+            varnish_sys::VRT_RemoveVDP(ctx.raw, &vp.as_ref().unwrap().0);
+            varnish_sys::VRT_RemoveVFP(ctx.raw, &vp.as_ref().unwrap().1);
+        }
         _ => (),
     }
     Ok(())

@@ -1,0 +1,40 @@
+varnishtest "replace_resp_body on the backend side"
+
+server s1 {
+	rxreq
+	txresp -body 0123456789
+
+	rxreq
+	txresp -body abcdef
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
+	import rers from "${vmod}";
+
+	sub vcl_init {
+		new re_cache = rers.init(2);
+	}
+
+	sub vcl_recv {
+		return (pass);
+	}
+
+	sub vcl_backend_response {
+		re_cache.replace_resp_body("1", "AA");
+		re_cache.replace_resp_body("567.", "EEFFGG|");
+		re_cache.replace_resp_body("f", "X");
+		re_cache.replace_resp_body("e", "Y");
+		re_cache.replace_resp_body("d", "Z");
+		set beresp.filters = "rers";
+	}
+} -start
+
+client c1 {
+	txreq
+	rxresp
+	expect resp.body == "0AA234EEFFGG|9"
+
+	txreq
+	rxresp
+	expect resp.body == "abcZYX"
+} -run
