@@ -28,7 +28,8 @@ pub struct init {
     mutexed_cache: Mutex<LruCache<String, Result<Regex, String>>>,
 }
 
-const PRIV_ANCHOR: [u8; 1] = [0];
+const PRIV_ANCHOR: *const c_void = [0].as_ptr() as *const c_void;
+const NAME: &'static str = "rers\0";
 
 pub struct Captures<'a> {
     caps: regex::bytes::Captures<'a>,
@@ -182,7 +183,7 @@ impl init {
             Ok(re) => re,
         };
         let priv_opt = unsafe {
-            varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR.as_ptr() as *const c_void).as_mut()
+            varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut()
         };
         if priv_opt.is_none() {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
@@ -205,6 +206,7 @@ impl init {
 // cheat: this is not exposed, but we know it exists
 extern "C" {
     pub fn THR_GetBusyobj() -> *mut varnish_sys::busyobj ;
+    pub fn THR_GetRequest() -> *mut varnish_sys::req ;
 }
 
 #[derive(Default)]
@@ -214,22 +216,19 @@ struct VXP {
     sent: Option<usize>,
 }
 
-impl VDP for VXP {
-    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
+impl VXP {
+    fn new() -> InitResult<VXP> {
         let priv_opt;
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
-            let req = ctx.raw.req.as_ref().unwrap();
-            assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
-            varnish_sys::http_Unset((*ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
-
             // the lying! the cheating!
             let mut fake_ctx = TestCtx::new(0);
-            fake_ctx.ctx().raw.req = ctx.raw.req;
+            fake_ctx.ctx().raw.req = THR_GetRequest();
+            fake_ctx.ctx().raw.bo = THR_GetBusyobj();
             priv_opt = varnish_sys::VRT_priv_task_get(
                 fake_ctx.ctx().raw,
-                PRIV_ANCHOR.as_ptr() as *const c_void,
+                PRIV_ANCHOR,
             )
             .as_mut()
             .and_then(|p| VPriv::new(p).take());
@@ -239,6 +238,20 @@ impl VDP for VXP {
             None => InitResult::Pass,
             Some(p) => InitResult::Ok(p),
         }
+    }
+}
+
+impl VDP for VXP {
+    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
+        // we don't know how/if the body will be modified, so we nuke the content-length
+        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
+        unsafe {
+            let req = ctx.raw.req.as_ref().unwrap();
+            assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
+            varnish_sys::http_Unset((*ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
+        }
+
+        VXP::new()
     }
 
     fn push(&mut self, ctx: &mut VDPCtx, act: PushAction, buf: &[u8]) -> PushResult {
@@ -258,34 +271,19 @@ impl VDP for VXP {
     }
 
     fn name() -> &'static str {
-        "rers\0"
+        NAME
     }
 }
 
 impl VFP for VXP {
     fn new(ctx: &mut VFPCtx) -> InitResult<Self> {
-        let priv_opt;
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             varnish_sys::http_Unset(ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
-
-            // the lying! the cheating! AGAIN!!
-            let mut fake_ctx = TestCtx::new(0);
-            let bo = THR_GetBusyobj().as_mut().unwrap();
-            fake_ctx.ctx().raw.bo = bo;
-            priv_opt = varnish_sys::VRT_priv_task_get(
-                fake_ctx.ctx().raw,
-                PRIV_ANCHOR.as_ptr() as *const c_void,
-            )
-            .as_mut()
-            .and_then(|p| VPriv::new(p).take());
         }
 
-        match priv_opt {
-            None => InitResult::Pass,
-            Some(p) => InitResult::Ok(p),
-        }
+        VXP::new()
     }
 
     fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
@@ -326,7 +324,7 @@ impl VFP for VXP {
     }
 
     fn name() -> &'static str {
-        "rers\0"
+        NAME
     }
 }
 
