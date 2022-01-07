@@ -11,7 +11,9 @@ use regex::bytes::Regex;
 
 use varnish::vcl::convert::IntoVCL;
 use varnish::vcl::ctx::{Ctx, Event, LogTag, TestCtx};
-use varnish::vcl::processor::{new_vdp, InitResult, PushAction, PushResult, VDPCtx, VDP, VFP, VFPCtx, PullResult, new_vfp};
+use varnish::vcl::processor::{
+    new_vdp, new_vfp, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP,
+};
 use varnish::vcl::vpriv::VPriv;
 use varnish_sys::VCL_STRING;
 
@@ -29,12 +31,12 @@ pub struct init {
 }
 
 const PRIV_ANCHOR: *const c_void = [0].as_ptr() as *const c_void;
-const NAME: &'static str = "rers\0";
+const NAME: &str = "rers\0";
 
 pub struct Captures<'a> {
     caps: regex::bytes::Captures<'a>,
     #[allow(dead_code)]
-    text: Option<Box<Vec<u8>>>,
+    text: Option<Vec<u8>>,
     #[allow(dead_code)]
     slice: Option<&'a [u8]>,
 }
@@ -103,21 +105,18 @@ impl init {
                 v
             });
 
-        // put the body on the heap so we can trust pointers to it
-        let text = Box::new(body);
-
         // we need rust to trust us on the lifetime of slice (which caps will
         // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
         // works
-        let ptr = text.as_ptr();
-        let len = text.len();
+        let ptr = body.as_ptr();
+        let len = body.len();
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         match re.captures(slice) {
             None => Ok(false),
             Some(caps) => {
                 vp.store(Captures {
                     caps,
-                    text: Some(text),
+                    text: Some(body),
                     slice: Some(slice),
                 });
                 Ok(true)
@@ -178,16 +177,14 @@ impl init {
         let re = match self.get_regex(res) {
             Err(s) => {
                 ctx.log(LogTag::VclError, &s);
-                return ();
+                return;
             }
             Ok(re) => re,
         };
-        let priv_opt = unsafe {
-            varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut()
-        };
+        let priv_opt = unsafe { varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
         if priv_opt.is_none() {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
-            return ();
+            return;
         }
         let mut vp: VPriv<VXP> = VPriv::new(priv_opt.unwrap());
         if let Some(ri) = vp.as_mut() {
@@ -205,8 +202,8 @@ impl init {
 
 // cheat: this is not exposed, but we know it exists
 extern "C" {
-    pub fn THR_GetBusyobj() -> *mut varnish_sys::busyobj ;
-    pub fn THR_GetRequest() -> *mut varnish_sys::req ;
+    pub fn THR_GetBusyobj() -> *mut varnish_sys::busyobj;
+    pub fn THR_GetRequest() -> *mut varnish_sys::req;
 }
 
 #[derive(Default)]
@@ -219,19 +216,14 @@ struct VXP {
 impl VXP {
     fn new() -> InitResult<VXP> {
         let priv_opt;
-        // we don't know how/if the body will be modified, so we nuke the content-length
-        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             // the lying! the cheating!
             let mut fake_ctx = TestCtx::new(0);
             fake_ctx.ctx().raw.req = THR_GetRequest();
             fake_ctx.ctx().raw.bo = THR_GetBusyobj();
-            priv_opt = varnish_sys::VRT_priv_task_get(
-                fake_ctx.ctx().raw,
-                PRIV_ANCHOR,
-            )
-            .as_mut()
-            .and_then(|p| VPriv::new(p).take());
+            priv_opt = varnish_sys::VRT_priv_task_get(fake_ctx.ctx().raw, PRIV_ANCHOR)
+                .as_mut()
+                .and_then(|p| VPriv::new(p).take());
         }
 
         match priv_opt {
@@ -244,7 +236,7 @@ impl VXP {
 impl VDP for VXP {
     fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
         // we don't know how/if the body will be modified, so we nuke the content-length
-        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
+        // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             let req = ctx.raw.req.as_ref().unwrap();
             assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
@@ -277,8 +269,6 @@ impl VDP for VXP {
 
 impl VFP for VXP {
     fn new(ctx: &mut VFPCtx) -> InitResult<Self> {
-        // we don't know how/if the body will be modified, so we nuke the content-length
-        // it's also no worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             varnish_sys::http_Unset(ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
         }
@@ -288,7 +278,7 @@ impl VFP for VXP {
 
     fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
         // first pull everything, using buf to receive the initial data before extending our body vector
-        while let None = self.sent {
+        while self.sent.is_none() {
             match ctx.pull(buf) {
                 PullResult::Err => return PullResult::Err,
                 PullResult::Ok(sz) => self.body.extend_from_slice(&buf[..sz]),
@@ -305,7 +295,7 @@ impl VFP for VXP {
                     }
                     self.body = replaced_body.into_owned();
                     self.sent = Some(0);
-                },
+                }
             }
         }
         // the body is completely in memory and fully transformed, we just need to copy whatever we
@@ -313,7 +303,7 @@ impl VFP for VXP {
         let mut out = self.sent.unwrap();
         assert!(out <= self.body.len());
         let len = std::cmp::min(buf.len(), self.body.len() - out);
-        buf[..len].copy_from_slice(&self.body[out..(out+len)]);
+        buf[..len].copy_from_slice(&self.body[out..(out + len)]);
         out += len;
         self.sent = Some(out);
         if out == self.body.len() {
@@ -332,7 +322,7 @@ pub unsafe fn event(
     ctx: &mut Ctx,
     vp: &mut VPriv<(varnish_sys::vdp, varnish_sys::vfp)>,
     event: Event,
-) -> Result<(), &'static str> {
+) -> Result<(), String> {
     match event {
         Event::Load => {
             vp.store((new_vdp::<VXP>(), new_vfp::<VXP>()));
