@@ -1,4 +1,4 @@
-varnishtest "capture_req_body() and group()"
+varnishtest "replace_resp_body on the client side"
 
 server s1 {
 	rxreq
@@ -20,8 +20,8 @@ varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
 	}
 
 	sub vcl_deliver {
-		re_cache.replace_resp_body("1", "A");
-		re_cache.replace_resp_body("567.", "EFG|");
+		re_cache.replace_resp_body("1", "aA");
+		re_cache.replace_resp_body("567.", "eEfFgG|");
 		re_cache.replace_resp_body("f", "X");
 		re_cache.replace_resp_body("e", "Y");
 		re_cache.replace_resp_body("d", "Z");
@@ -32,7 +32,7 @@ varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
 client c1 {
 	txreq
 	rxresp
-	expect resp.body == "0A234EFG|9"
+	expect resp.body == "0aA234YEXFgG|9"
 
 	txreq
 	rxresp
