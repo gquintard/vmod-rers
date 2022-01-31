@@ -344,8 +344,9 @@ checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
 name = "varnish"
-version = "0.0.7"
-source = "git+https://github.com/gquintard/varnish-rs?rev=29d594fe4a7190148965e01ee149cc1660467614#29d594fe4a7190148965e01ee149cc1660467614"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "309e8097404d44645437f99499b310f4c149c7b6df3f45d7d0879c2e1e5a5a46"
 dependencies = [
  "pkg-config",
  "varnish-sys",
@@ -353,8 +354,9 @@ dependencies = [
 
 [[package]]
 name = "varnish-sys"
-version = "0.0.7"
-source = "git+https://github.com/gquintard/varnish-rs?rev=29d594fe4a7190148965e01ee149cc1660467614#29d594fe4a7190148965e01ee149cc1660467614"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6871e3e21c20ed59f6e2d73d0d6f4b23d89be7c4b66e3f936e2b3fe4fdc11c71"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -374,7 +376,7 @@ checksum = "5fecdca9a5291cc2b8dcf7dc02453fee791a280f3743cb0905f8822ae463b3fe"
 
 [[package]]
 name = "vmod_rers"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "lru",
  "regex",

@@ -1,15 +1,15 @@
 [package]
 name = "vmod_rers"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 
 [build-dependencies]
-varnish = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
-varnish-sys = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
+varnish = "0.0.8"
+varnish-sys = "0.0.8"
 
 [dependencies]
-varnish = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
-varnish-sys = { git = "https://github.com/gquintard/varnish-rs", rev = "29d594fe4a7190148965e01ee149cc1660467614" }
+varnish = "0.0.8"
+varnish-sys = "0.0.8"
 regex = "1.5"
 lru = "0.7.1"
 
