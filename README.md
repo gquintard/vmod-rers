@@ -36,6 +36,8 @@ You'll need:
 
 ## Build and test
 
+With `cargo` only:
+
 ``` bash
 cargo build --release
 cargo test --release
@@ -43,13 +45,13 @@ cargo test --release
 
 The vmod file will be found at `target/release/libvmod_rs_template.so`.
 
-## Making it your own
-
-Rename the vmod:
+Alternatively, if you have `jq` and `rst2man`, you can use `build.sh`
 
 ``` bash
-git grep -l rs_template | xargs sed -i 's/rs_template/new_name/g'
+./build.sh [OUTDIR]
 ```
+
+This will place the `so` file as well as the generated documentation in the `OUT` directory (or in the current directory if `OUT` wasn't specified).
 
 ## Packages
 
