@@ -234,13 +234,13 @@ impl VXP {
 }
 
 impl VDP for VXP {
-    fn new(ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
+    fn new(vrt_ctx: &Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
-            let req = ctx.raw.req.as_ref().unwrap();
+            let req = vdp_ctx.raw.req.as_ref().unwrap();
             assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
-            varnish_sys::http_Unset((*ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
+            varnish_sys::http_Unset((*vdp_ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
         VXP::new()
@@ -268,9 +268,9 @@ impl VDP for VXP {
 }
 
 impl VFP for VXP {
-    fn new(ctx: &mut VFPCtx) -> InitResult<Self> {
+    fn new(_vrt_ctx: &Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
         unsafe {
-            varnish_sys::http_Unset(ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
+            varnish_sys::http_Unset(vdp_ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
         VXP::new()
@@ -320,18 +320,16 @@ impl VFP for VXP {
 
 pub unsafe fn event(
     ctx: &mut Ctx,
-    vp: &mut VPriv<(varnish_sys::vdp, varnish_sys::vfp)>,
+    vp: &mut VPriv<(varnish_sys::vfp, varnish_sys::vdp)>,
     event: Event,
 ) -> Result<(), String> {
     match event {
         Event::Load => {
-            vp.store((new_vdp::<VXP>(), new_vfp::<VXP>()));
-            varnish_sys::VRT_AddVDP(ctx.raw, &vp.as_ref().unwrap().0);
-            varnish_sys::VRT_AddVFP(ctx.raw, &vp.as_ref().unwrap().1);
+            vp.store((new_vfp::<VXP>(), new_vdp::<VXP>()));
+            varnish_sys::VRT_AddFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
         }
         Event::Discard => {
-            varnish_sys::VRT_RemoveVDP(ctx.raw, &vp.as_ref().unwrap().0);
-            varnish_sys::VRT_RemoveVFP(ctx.raw, &vp.as_ref().unwrap().1);
+            varnish_sys::VRT_RemoveFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
         }
         _ => (),
     }
