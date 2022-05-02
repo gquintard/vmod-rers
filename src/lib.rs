@@ -10,7 +10,7 @@ use lru::LruCache;
 use regex::bytes::Regex;
 
 use varnish::vcl::convert::IntoVCL;
-use varnish::vcl::ctx::{Ctx, Event, LogTag, TestCtx};
+use varnish::vcl::ctx::{Ctx, Event, LogTag};
 use varnish::vcl::processor::{
     new_vdp, new_vfp, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP,
 };
@@ -214,21 +214,14 @@ struct VXP {
 }
 
 impl VXP {
-    fn new() -> InitResult<VXP> {
-        let priv_opt;
+    fn new(vrt_ctx: &Ctx) -> InitResult<VXP> {
         unsafe {
-            // the lying! the cheating!
-            let mut fake_ctx = TestCtx::new(0);
-            fake_ctx.ctx().raw.req = THR_GetRequest();
-            fake_ctx.ctx().raw.bo = THR_GetBusyobj();
-            priv_opt = varnish_sys::VRT_priv_task_get(fake_ctx.ctx().raw, PRIV_ANCHOR)
+            match varnish_sys::VRT_priv_task_get(vrt_ctx.raw, PRIV_ANCHOR)
                 .as_mut()
-                .and_then(|p| VPriv::new(p).take());
-        }
-
-        match priv_opt {
-            None => InitResult::Pass,
-            Some(p) => InitResult::Ok(p),
+                .and_then(|p| VPriv::new(p).take()) {
+                    None => InitResult::Pass,
+                    Some(p) => InitResult::Ok(p),
+                }
         }
     }
 }
@@ -243,7 +236,7 @@ impl VDP for VXP {
             varnish_sys::http_Unset((*vdp_ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
-        VXP::new()
+        VXP::new(vrt_ctx)
     }
 
     fn push(&mut self, ctx: &mut VDPCtx, act: PushAction, buf: &[u8]) -> PushResult {
@@ -268,12 +261,12 @@ impl VDP for VXP {
 }
 
 impl VFP for VXP {
-    fn new(_vrt_ctx: &Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
+    fn new(vrt_ctx: &Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
         unsafe {
             varnish_sys::http_Unset(vdp_ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
-        VXP::new()
+        VXP::new(vrt_ctx)
     }
 
     fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
