@@ -42,11 +42,11 @@ pub struct Captures<'a> {
 }
 
 impl init {
-    pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Self {
+    pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Result<Self, String> {
         let sz = max(0, opt_sz.unwrap_or(1000));
-        init {
+        Ok(init {
             mutexed_cache: Mutex::new(LruCache::new(sz as usize)),
-        }
+        })
     }
 
     fn get_regex(&self, res: &str) -> Result<Regex, String> {

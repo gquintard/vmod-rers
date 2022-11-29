@@ -28,7 +28,7 @@ only the first `lim` groups are replaced.
 $Method BOOL .capture(PRIV_TASK, STRING string, STRING regex)
 
 Equivalent to `is_match()`, but remembers the captured groups so you can access
-them `group()` later on.
+them with `group()` later on.
 
 $Method BOOL .capture_req_body(PRIV_TASK, STRING regex)
 

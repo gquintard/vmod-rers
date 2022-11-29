@@ -32,7 +32,19 @@ sub vcl_recv {
 You'll need:
 - `cargo` (and the accompanying `rust` package)
 - `python3`
-- the `varnish` 7.0.1 development libraries/headers ([depends on the `varnish` crate you are using](https://github.com/gquintard/varnish-rs#versions))
+- the `varnish` development libraries/headers
+
+## Version matching
+
+Depending on which `varnish` version tou are targeting, select the right `vmod_rers` version (available as git tags, and as [releases](https://github.com/gquintard/vmod_rers/releases)).
+
+| vmod-rers | varnish |
+| :----------- | :-----: |
+| v0.0.5        | 7.2     |
+| v0.0.4        | 7.0     |
+| v0.0.3        | 7.0     |
+| v0.0.2        | 7.0     |
+| v0.0.1        | 7.0     |
 
 ## Build and test
 

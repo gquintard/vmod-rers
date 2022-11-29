@@ -1,15 +1,15 @@
 [package]
 name = "vmod_rers"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 
 [build-dependencies]
-varnish = "0.0.9"
-varnish-sys = "0.0.9"
+varnish = "0.0.12"
+varnish-sys = "0.0.12"
 
 [dependencies]
-varnish = "0.0.9"
-varnish-sys = "0.0.9"
+varnish = "0.0.12"
+varnish-sys = "0.0.12"
 regex = "1.5"
 lru = "0.7.1"
 
