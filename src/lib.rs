@@ -5,6 +5,7 @@ use std::cmp::max;
 use std::os::raw::c_void;
 use std::slice;
 use std::sync::Mutex;
+use std::error::Error;
 
 use lru::LruCache;
 use regex::bytes::Regex;
@@ -42,7 +43,7 @@ pub struct Captures<'a> {
 }
 
 impl init {
-    pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Result<Self, String> {
+    pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Result<Self, u8> {
         let sz = max(0, opt_sz.unwrap_or(1000));
         Ok(init {
             mutexed_cache: Mutex::new(LruCache::new(sz as usize)),
@@ -53,7 +54,7 @@ impl init {
         let mut lru = self.mutexed_cache.lock().unwrap();
         if lru.get(res).is_none() {
             let comp = Regex::new(res).map_err(|e| e.to_string());
-            lru.put(res.to_string(), comp);
+            lru.put(res.into(), comp);
         }
         lru.get(res).unwrap().clone()
     }
@@ -88,7 +89,7 @@ impl init {
         ctx: &mut Ctx,
         vp: &mut VPriv<Captures<'a>>,
         res: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Box<dyn Error>> {
         vp.clear();
 
         let re = match self.get_regex(res) {
@@ -227,7 +228,7 @@ impl VXP {
 }
 
 impl VDP for VXP {
-    fn new(vrt_ctx: &Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
@@ -261,7 +262,7 @@ impl VDP for VXP {
 }
 
 impl VFP for VXP {
-    fn new(vrt_ctx: &Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
         unsafe {
             varnish_sys::http_Unset(vdp_ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
         }
