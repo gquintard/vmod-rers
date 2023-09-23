@@ -39,6 +39,7 @@ Depending on which `varnish` version tou are targeting, select the right `vmod_r
 
 | vmod-rers | varnish |
 | :----------- | :-----: |
+| v0.0.8        | 7.4     |
 | v0.0.7        | 7.3     |
 | v0.0.6        | 7.3     |
 | v0.0.5        | 7.2     |
@@ -97,7 +98,7 @@ Then, follow distribution-specific instructions.
 ``` bash
 # create a work directory
 mkdir build
-# copy the tarball and PKGBUIL file, substituing the variables we care about
+# copy the tarball and PKGBUILD file, substituing the variables we care about
 cp vmod_rs_template-$VMOD_VERSION.tar.gz build
 sed -e "s/@VMOD_VERSION@/$VMOD_VERSION/" -e "s/@VARNISH_VERSION@/$VARNISH_VERSION/" pkg/arch/PKGBUILD > build/PKGBUILD
 
