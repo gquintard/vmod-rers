@@ -2,9 +2,9 @@
 
 This is a vmod for [varnish](http://varnish-cache.org/), allowing you to expand on what the native VCL regex can do.
 
-Notably, it offers dynamic regex compilation backed by a LRU cache to speed processing up while limiting the memory footprint. On top of this, it supports named capturing groups which simplifies the handling of complex regex.
+Notably, it offers dynamic regex compilation backed by an LRU cache to speed processing up while limiting the memory footprint. On top of this, it supports named capturing groups which simplifies the handling of complex regex.
 
-As usual, the full VCL API is described in [vmod.vcc](vmod.vcc), and it you need help, you can find me as `guillaume` on the [varnish discord server](https://discord.gg/EuwdvbZR6d).
+As usual, the full VCL API is described in [vmod.vcc](vmod.vcc), and if you need help, you can find me as `guillaume` on the [varnish discord server](https://discord.gg/EuwdvbZR6d).
 
 ## VCL Example
 
@@ -38,16 +38,16 @@ You'll need:
 Depending on which `varnish` version tou are targeting, select the right `vmod_rers` version (available as git tags, and as [releases](https://github.com/gquintard/vmod_rers/releases)).
 
 | vmod-rers | varnish |
-| :----------- | :-----: |
-| v0.0.9        | 7.5     |
-| v0.0.8        | 7.4     |
-| v0.0.7        | 7.3     |
-| v0.0.6        | 7.3     |
-| v0.0.5        | 7.2     |
-| v0.0.4        | 7.0     |
-| v0.0.3        | 7.0     |
-| v0.0.2        | 7.0     |
-| v0.0.1        | 7.0     |
+|:----------|:-------:|
+| v0.0.9    |   7.5   |
+| v0.0.8    |   7.4   |
+| v0.0.7    |   7.3   |
+| v0.0.6    |   7.3   |
+| v0.0.5    |   7.2   |
+| v0.0.4    |   7.0   |
+| v0.0.3    |   7.0   |
+| v0.0.2    |   7.0   |
+| v0.0.1    |   7.0   |
 
 ## Build and test
 
