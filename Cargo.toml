@@ -3,14 +3,12 @@ name = "vmod_rers"
 version = "0.0.9"
 edition = "2021"
 
-[build-dependencies]
-varnish = "0.0.19"
-
 [dependencies]
-varnish = "0.0.19"
-varnish-sys = "0.0.19"
-regex = "1.5"
 lru = "0.7.1"
+regex = "1.5"
+varnish = { git = "https://github.com/gquintard/varnish-rs.git", branch = "feature-macro"}
+varnish-macros = { git = "https://github.com/gquintard/varnish-rs.git", branch = "feature-macro" }
+varnish-sys = { git = "https://github.com/gquintard/varnish-rs.git", branch = "feature-macro"}
 
 [lib]
 crate-type = ["cdylib"]
