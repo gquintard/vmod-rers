@@ -2,20 +2,20 @@ varnish::boilerplate!();
 
 use std::borrow::Cow;
 use std::cmp::max;
-use std::error::Error;
 use std::os::raw::c_void;
 use std::slice;
 use std::sync::Mutex;
+use std::error::Error;
 
 use lru::LruCache;
 use regex::bytes::Regex;
+
 use varnish::vcl::convert::IntoVCL;
 use varnish::vcl::ctx::{Ctx, Event, LogTag};
 use varnish::vcl::processor::{
     new_vdp, new_vfp, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP,
 };
 use varnish::vcl::vpriv::VPriv;
-use varnish_sys as ffi;
 use varnish_sys::VCL_STRING;
 
 varnish::vtc!(test01);
@@ -107,7 +107,7 @@ impl init {
             });
 
         // we need rust to trust us on the lifetime of slice (which caps will
-        // point to), so we go to raw parts and back again to trick it. It's not awesome, but it
+        // points to), so we go to raw parts and back again to trick it. It's not awesome, but it
         // works
         let ptr = body.as_ptr();
         let len = body.len();
@@ -182,7 +182,7 @@ impl init {
             }
             Ok(re) => re,
         };
-        let priv_opt = unsafe { ffi::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
+        let priv_opt = unsafe { varnish_sys::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
         if priv_opt.is_none() {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
             return;
@@ -201,28 +201,10 @@ impl init {
     }
 }
 
-pub unsafe fn event(
-    ctx: &mut Ctx,
-    vp: &mut VPriv<(ffi::vfp, ffi::vdp)>,
-    event: Event,
-) -> Result<(), String> {
-    match event {
-        Event::Load => {
-            vp.store((new_vfp::<VXP>(), new_vdp::<VXP>()));
-            ffi::VRT_AddFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
-        }
-        Event::Discard => {
-            ffi::VRT_RemoveFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
-        }
-        _ => (),
-    }
-    Ok(())
-}
-
 // cheat: this is not exposed, but we know it exists
 extern "C" {
-    pub fn THR_GetBusyobj() -> *mut ffi::busyobj;
-    pub fn THR_GetRequest() -> *mut ffi::req;
+    pub fn THR_GetBusyobj() -> *mut varnish_sys::busyobj;
+    pub fn THR_GetRequest() -> *mut varnish_sys::req;
 }
 
 #[derive(Default)]
@@ -235,29 +217,24 @@ struct VXP {
 impl VXP {
     fn new(vrt_ctx: &Ctx) -> InitResult<VXP> {
         unsafe {
-            match ffi::VRT_priv_task_get(vrt_ctx.raw, PRIV_ANCHOR)
+            match varnish_sys::VRT_priv_task_get(vrt_ctx.raw, PRIV_ANCHOR)
                 .as_mut()
-                .and_then(|p| VPriv::new(p).take())
-            {
-                None => InitResult::Pass,
-                Some(p) => InitResult::Ok(p),
-            }
+                .and_then(|p| VPriv::new(p).take()) {
+                    None => InitResult::Pass,
+                    Some(p) => InitResult::Ok(p),
+                }
         }
     }
 }
 
 impl VDP for VXP {
-    fn name() -> &'static str {
-        NAME
-    }
-
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut ffi::objcore) -> InitResult<VXP> {
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut varnish_sys::objcore) -> InitResult<VXP> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
             let req = vdp_ctx.raw.req.as_ref().unwrap();
-            assert_eq!(req.magic, ffi::REQ_MAGIC);
-            ffi::http_Unset((*vdp_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
+            assert_eq!(req.magic, varnish_sys::REQ_MAGIC);
+            varnish_sys::http_Unset((*vdp_ctx.raw.req).resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
         VXP::new(vrt_ctx)
@@ -278,16 +255,16 @@ impl VDP for VXP {
         }
         ctx.push(act, &replaced_body)
     }
-}
 
-impl VFP for VXP {
     fn name() -> &'static str {
         NAME
     }
+}
 
+impl VFP for VXP {
     fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
         unsafe {
-            ffi::http_Unset(vdp_ctx.raw.resp, ffi::H_Content_Length.as_ptr());
+            varnish_sys::http_Unset(vdp_ctx.raw.resp, varnish_sys::H_Content_Length.as_ptr());
         }
 
         VXP::new(vrt_ctx)
@@ -329,4 +306,26 @@ impl VFP for VXP {
             PullResult::Ok(len)
         }
     }
+
+    fn name() -> &'static str {
+        NAME
+    }
+}
+
+pub unsafe fn event(
+    ctx: &mut Ctx,
+    vp: &mut VPriv<(varnish_sys::vfp, varnish_sys::vdp)>,
+    event: Event,
+) -> Result<(), String> {
+    match event {
+        Event::Load => {
+            vp.store((new_vfp::<VXP>(), new_vdp::<VXP>()));
+            varnish_sys::VRT_AddFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
+        }
+        Event::Discard => {
+            varnish_sys::VRT_RemoveFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
+        }
+        _ => (),
+    }
+    Ok(())
 }
