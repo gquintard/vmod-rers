@@ -4,11 +4,14 @@ version = "0.0.9"
 edition = "2021"
 
 [build-dependencies]
-varnish = "0.0.19"
+#varnish = "0.0.19"
+varnish = { path = "../varnish-rs/varnish" }
 
 [dependencies]
-varnish = "0.0.19"
-varnish-sys = "0.0.19"
+varnish = { path = "../varnish-rs/varnish" }
+varnish-sys = { path = "../varnish-rs/varnish-sys" }
+#varnish = "0.0.19"
+#varnish-sys = "0.0.19"
 regex = "1.5"
 lru = "0.7.1"
 

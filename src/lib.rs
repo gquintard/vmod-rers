@@ -3,28 +3,23 @@ varnish::boilerplate!();
 use std::borrow::Cow;
 use std::cmp::max;
 use std::error::Error;
+use std::ffi::CStr;
 use std::os::raw::c_void;
 use std::slice;
 use std::sync::Mutex;
 
 use lru::LruCache;
 use regex::bytes::Regex;
-use varnish::vcl::convert::IntoVCL;
-use varnish::vcl::ctx::{Ctx, Event, LogTag};
-use varnish::vcl::processor::{
+use varnish::vcl::IntoVCL;
+use varnish::vcl::{Ctx, Event, LogTag};
+use varnish::vcl::{
     new_vdp, new_vfp, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP,
 };
-use varnish::vcl::vpriv::VPriv;
-use varnish_sys as ffi;
-use varnish_sys::VCL_STRING;
+use varnish::vcl::VPriv;
+use varnish::ffi;
+use varnish::ffi::VCL_STRING;
 
-varnish::vtc!(test01);
-varnish::vtc!(test02);
-varnish::vtc!(test03);
-varnish::vtc!(test04);
-varnish::vtc!(test05);
-varnish::vtc!(test06);
-varnish::vtc!(test07);
+varnish::run_vtc_tests!("tests/*.vtc");
 
 #[allow(non_camel_case_types)]
 pub struct init {
@@ -32,7 +27,7 @@ pub struct init {
 }
 
 const PRIV_ANCHOR: *const c_void = [0].as_ptr() as *const c_void;
-const NAME: &str = "rers\0";
+const NAME: &CStr = c"rers";
 
 pub struct Captures<'a> {
     caps: regex::bytes::Captures<'a>,
@@ -187,7 +182,7 @@ impl init {
             ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
             return;
         }
-        let mut vp: VPriv<VXP> = VPriv::new(priv_opt.unwrap());
+        let mut vp: VPriv<VXP> = unsafe { VPriv::from_ptr(priv_opt.unwrap()) };
         if let Some(ri) = vp.as_mut() {
             ri.steps.push((re, sub.to_owned()));
         } else {
@@ -237,7 +232,7 @@ impl VXP {
         unsafe {
             match ffi::VRT_priv_task_get(vrt_ctx.raw, PRIV_ANCHOR)
                 .as_mut()
-                .and_then(|p| VPriv::new(p).take())
+                .and_then(|p| VPriv::from_ptr(p).take())
             {
                 None => InitResult::Pass,
                 Some(p) => InitResult::Ok(p),
@@ -247,17 +242,17 @@ impl VXP {
 }
 
 impl VDP for VXP {
-    fn name() -> &'static str {
+    fn name() -> &'static CStr {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut ffi::objcore) -> InitResult<VXP> {
+    fn new(vrt_ctx: &mut Ctx, _vdp_ctx: &mut VDPCtx) -> InitResult<VXP> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
-            let req = vdp_ctx.raw.req.as_ref().unwrap();
+            let req = vrt_ctx.raw.req.as_ref().unwrap();
             assert_eq!(req.magic, ffi::REQ_MAGIC);
-            ffi::http_Unset((*vdp_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
+            ffi::http_Unset((*vrt_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
         }
 
         VXP::new(vrt_ctx)
@@ -281,7 +276,7 @@ impl VDP for VXP {
 }
 
 impl VFP for VXP {
-    fn name() -> &'static str {
+    fn name() -> &'static CStr {
         NAME
     }
 
