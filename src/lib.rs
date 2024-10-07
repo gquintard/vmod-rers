@@ -1,30 +1,207 @@
-varnish::boilerplate!();
-
 use std::borrow::Cow;
-use std::cmp::max;
-use std::error::Error;
+use std::ffi::CStr;
 use std::os::raw::c_void;
-use std::slice;
 use std::sync::Mutex;
 
 use lru::LruCache;
 use regex::bytes::Regex;
-use varnish::vcl::convert::IntoVCL;
-use varnish::vcl::ctx::{Ctx, Event, LogTag};
-use varnish::vcl::processor::{
-    new_vdp, new_vfp, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP,
-};
-use varnish::vcl::vpriv::VPriv;
-use varnish_sys as ffi;
-use varnish_sys::VCL_STRING;
+use varnish::vcl::{Ctx, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP};
+use varnish::{ffi, run_vtc_tests};
+use varnish_sys::ffi::{vmod_priv, vmod_priv_methods, VMOD_PRIV_METHODS_MAGIC};
 
-varnish::vtc!(test01);
-varnish::vtc!(test02);
-varnish::vtc!(test03);
-varnish::vtc!(test04);
-varnish::vtc!(test05);
-varnish::vtc!(test06);
-varnish::vtc!(test07);
+run_vtc_tests!("tests/*.vtc");
+
+#[varnish::vmod]
+mod rers {
+    use std::cmp::max;
+    use std::error::Error;
+    use std::slice;
+    use std::str::from_utf8;
+    use std::sync::Mutex;
+
+    use lru::LruCache;
+    use varnish::ffi::{self, vdp, vfp};
+    use varnish::vcl::{new_vdp, new_vfp, Ctx, Event, LogTag};
+
+    use super::{init, Captures, Vxp, PRIV_ANCHOR, PRIV_VXP_METHODS};
+
+    impl init {
+        pub fn new(#[default(1000)] cache_size: i64) -> Self {
+            let cache_size = max(0, cache_size) as usize;
+            init {
+                mutexed_cache: Mutex::new(LruCache::new(cache_size)),
+            }
+        }
+
+        pub fn is_match(&self, s: &str, res: &str) -> bool {
+            self.get_regex(res)
+                .map(|re| re.is_match(s.as_bytes()))
+                .unwrap_or(false)
+        }
+
+        pub fn replace(
+            &self,
+            haystack: &str,
+            res: &str,
+            sub: &str,
+            limit: Option<i64>,
+        ) -> Result<String, String> {
+            let limit = max(0, limit.unwrap_or(0)) as usize;
+            let re = self.get_regex(res)?;
+            let repl = re.replacen(haystack.as_bytes(), limit, sub.as_bytes());
+            from_utf8(repl.as_ref())
+                .map_err(|e| e.to_string())
+                .map(|s| s.to_owned())
+        }
+
+        pub fn capture_req_body(
+            &self,
+            ctx: &mut Ctx,
+            #[shared_per_task] vp: &mut Option<Box<Captures<'_>>>,
+            res: &str,
+        ) -> Result<bool, Box<dyn Error>> {
+            let re = match self.get_regex(res) {
+                Err(_) => return Ok(false),
+                Ok(re) => re,
+            };
+
+            // we need a contiguous buffer to present to the regex, so we coalesce the cached body
+            let body = ctx
+                .cached_req_body()?
+                .into_iter()
+                .fold(Vec::new(), |mut v, b| {
+                    v.extend_from_slice(b);
+                    v
+                });
+
+            // we need rust to trust us on the lifetime of slice (which caps will
+            // point to), so we go to raw parts and back again to trick it. It's not awesome, but it
+            // works
+            let ptr = body.as_ptr();
+            let len = body.len();
+            let slice = unsafe { slice::from_raw_parts(ptr, len) };
+            match re.captures(slice) {
+                None => Ok(false),
+                Some(caps) => {
+                    *vp = Some(Box::new(Captures {
+                        caps,
+                        text: Some(body),
+                        slice: Some(slice),
+                    }));
+                    Ok(true)
+                }
+            }
+        }
+
+        pub fn capture<'a>(
+            &self,
+            #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
+            s: &'a str,
+            res: &str,
+        ) -> bool {
+            let re = match self.get_regex(res) {
+                Err(_) => return false,
+                Ok(re) => re,
+            };
+
+            let caps = match re.captures(s.as_bytes()) {
+                None => return false,
+                Some(caps) => caps,
+            };
+            *vp = Some(Box::new(Captures {
+                caps,
+                text: None,
+                slice: None,
+            }));
+            true
+        }
+
+        pub fn group<'a>(
+            &self,
+            #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
+            n: i64,
+        ) -> Option<&'a [u8]> {
+            let n = if n >= 0 { n } else { 0 } as usize;
+            vp.as_ref()
+                .and_then(|c| c.caps.get(n))
+                .map(|m| m.as_bytes())
+        }
+
+        pub fn named_group<'a>(
+            &self,
+            #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
+            name: &str,
+        ) -> Option<&'a [u8]> {
+            vp.as_ref()
+                .and_then(|c| c.caps.name(name))
+                .map(|m| m.as_bytes())
+        }
+
+        pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
+            let Ok(re) = self
+                .get_regex(res)
+                .map_err(|e| ctx.log(LogTag::VclError, &e))
+            else {
+                return; // FIXME: should this return an error to call VRT_fail()?
+            };
+
+            let priv_opt = unsafe { ffi::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
+            let Some(priv_opt) = priv_opt else {
+                ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
+                return;
+            };
+
+            // Low level access: convert pointer into a Box, manipulate it, and store it back
+            let vp = unsafe { (*priv_opt).take::<Vxp>() };
+            let value = (re, sub.to_owned());
+            let ri = if let Some(mut ri) = vp {
+                ri.steps.push(value);
+                ri
+            } else {
+                Box::new(Vxp {
+                    body: Vec::new(),
+                    steps: vec![value],
+                    sent: None,
+                })
+            };
+            unsafe {
+                (*priv_opt).put(ri, &PRIV_VXP_METHODS);
+            }
+        }
+    }
+
+    #[event]
+    pub fn event(
+        ctx: &mut Ctx,
+        #[shared_per_vcl] vp: &mut Option<Box<(vfp, vdp)>>,
+        event: Event,
+    ) -> Result<(), String> {
+        match event {
+            Event::Load => {
+                *vp = Some(Box::new((new_vfp::<Vxp>(), new_vdp::<Vxp>())));
+                unsafe {
+                    ffi::VRT_AddFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
+                }
+            }
+            Event::Discard => unsafe {
+                ffi::VRT_RemoveFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
+            },
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl init {
+    fn get_regex(&self, res: &str) -> Result<Regex, String> {
+        let mut lru = self.mutexed_cache.lock().unwrap();
+        if lru.get(res).is_none() {
+            let comp = Regex::new(res).map_err(|e| e.to_string());
+            lru.put(res.into(), comp);
+        }
+        lru.get(res).unwrap().clone()
+    }
+}
 
 #[allow(non_camel_case_types)]
 pub struct init {
@@ -32,7 +209,7 @@ pub struct init {
 }
 
 const PRIV_ANCHOR: *const c_void = [0].as_ptr() as *const c_void;
-const NAME: &str = "rers\0";
+const NAME: &CStr = c"rers";
 
 pub struct Captures<'a> {
     caps: regex::bytes::Captures<'a>,
@@ -42,183 +219,6 @@ pub struct Captures<'a> {
     slice: Option<&'a [u8]>,
 }
 
-impl init {
-    pub fn new(_ctx: &Ctx, _vcl_name: &str, opt_sz: Option<i64>) -> Result<Self, u8> {
-        let sz = max(0, opt_sz.unwrap_or(1000));
-        Ok(init {
-            mutexed_cache: Mutex::new(LruCache::new(sz as usize)),
-        })
-    }
-
-    fn get_regex(&self, res: &str) -> Result<Regex, String> {
-        let mut lru = self.mutexed_cache.lock().unwrap();
-        if lru.get(res).is_none() {
-            let comp = Regex::new(res).map_err(|e| e.to_string());
-            lru.put(res.into(), comp);
-        }
-        lru.get(res).unwrap().clone()
-    }
-
-    pub fn is_match(&self, _: &mut Ctx, s: &str, res: &str) -> bool {
-        self.get_regex(res)
-            .map(|re| re.is_match(s.as_bytes()))
-            .unwrap_or(false)
-    }
-
-    pub fn replace(
-        &self,
-        ctx: &mut Ctx,
-        s: &str,
-        res: &str,
-        sub: &str,
-        opt_lim: Option<i64>,
-    ) -> Result<VCL_STRING, String> {
-        let lim = max(0, opt_lim.unwrap_or(0));
-        match self.get_regex(res) {
-            Err(_) => s.into_vcl(&mut ctx.ws),
-            Ok(re) => {
-                let replaced = re.replacen(s.as_bytes(), lim as usize, sub.as_bytes());
-                let buf = ctx.ws.copy_bytes_with_null(&replaced)?;
-                Ok(buf.as_ptr() as VCL_STRING)
-            }
-        }
-    }
-
-    pub fn capture_req_body<'a>(
-        &self,
-        ctx: &mut Ctx,
-        vp: &mut VPriv<Captures<'a>>,
-        res: &str,
-    ) -> Result<bool, Box<dyn Error>> {
-        vp.clear();
-
-        let re = match self.get_regex(res) {
-            Err(_) => return Ok(false),
-            Ok(re) => re,
-        };
-
-        // we need a contiguous buffer to present to the regex, so we coalesce the cached body
-        let body = ctx
-            .cached_req_body()?
-            .into_iter()
-            .fold(Vec::new(), |mut v, b| {
-                v.extend_from_slice(b);
-                v
-            });
-
-        // we need rust to trust us on the lifetime of slice (which caps will
-        // point to), so we go to raw parts and back again to trick it. It's not awesome, but it
-        // works
-        let ptr = body.as_ptr();
-        let len = body.len();
-        let slice = unsafe { slice::from_raw_parts(ptr, len) };
-        match re.captures(slice) {
-            None => Ok(false),
-            Some(caps) => {
-                vp.store(Captures {
-                    caps,
-                    text: Some(body),
-                    slice: Some(slice),
-                });
-                Ok(true)
-            }
-        }
-    }
-
-    pub fn capture<'a>(
-        &self,
-        _: &mut Ctx,
-        vp: &mut VPriv<Captures<'a>>,
-        s: &'a str,
-        res: &str,
-    ) -> bool {
-        vp.clear();
-
-        let re = match self.get_regex(res) {
-            Err(_) => return false,
-            Ok(re) => re,
-        };
-
-        let caps = match re.captures(s.as_bytes()) {
-            None => return false,
-            Some(caps) => caps,
-        };
-        vp.store(Captures {
-            caps,
-            text: None,
-            slice: None,
-        });
-        true
-    }
-
-    pub fn group<'a>(
-        &self,
-        _ctx: &mut Ctx,
-        vp: &mut VPriv<Captures<'a>>,
-        n: i64,
-    ) -> Option<&'a [u8]> {
-        let n = if n >= 0 { n } else { 0 } as usize;
-        vp.as_ref()
-            .and_then(|c| c.caps.get(n))
-            .map(|m| m.as_bytes())
-    }
-
-    pub fn named_group<'a>(
-        &self,
-        _ctx: &mut Ctx,
-        vp: &mut VPriv<Captures<'a>>,
-        name: &str,
-    ) -> Option<&'a [u8]> {
-        vp.as_ref()
-            .and_then(|c| c.caps.name(name))
-            .map(|m| m.as_bytes())
-    }
-
-    pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
-        let re = match self.get_regex(res) {
-            Err(s) => {
-                ctx.log(LogTag::VclError, &s);
-                return;
-            }
-            Ok(re) => re,
-        };
-        let priv_opt = unsafe { ffi::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
-        if priv_opt.is_none() {
-            ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
-            return;
-        }
-        let mut vp: VPriv<VXP> = VPriv::new(priv_opt.unwrap());
-        if let Some(ri) = vp.as_mut() {
-            ri.steps.push((re, sub.to_owned()));
-        } else {
-            let ri = VXP {
-                body: Vec::new(),
-                steps: vec![(re, sub.to_owned())],
-                sent: None,
-            };
-            vp.store(ri);
-        }
-    }
-}
-
-pub unsafe fn event(
-    ctx: &mut Ctx,
-    vp: &mut VPriv<(ffi::vfp, ffi::vdp)>,
-    event: Event,
-) -> Result<(), String> {
-    match event {
-        Event::Load => {
-            vp.store((new_vfp::<VXP>(), new_vdp::<VXP>()));
-            ffi::VRT_AddFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
-        }
-        Event::Discard => {
-            ffi::VRT_RemoveFilter(ctx.raw, &vp.as_ref().unwrap().0, &vp.as_ref().unwrap().1);
-        }
-        _ => (),
-    }
-    Ok(())
-}
-
 // cheat: this is not exposed, but we know it exists
 extern "C" {
     pub fn THR_GetBusyobj() -> *mut ffi::busyobj;
@@ -226,32 +226,32 @@ extern "C" {
 }
 
 #[derive(Default)]
-struct VXP {
+struct Vxp {
     steps: Vec<(Regex, String)>,
     body: Vec<u8>,
     sent: Option<usize>,
 }
 
-impl VXP {
-    fn new(vrt_ctx: &Ctx) -> InitResult<VXP> {
+impl Vxp {
+    fn new(vrt_ctx: &Ctx) -> InitResult<Vxp> {
         unsafe {
             match ffi::VRT_priv_task_get(vrt_ctx.raw, PRIV_ANCHOR)
                 .as_mut()
-                .and_then(|p| VPriv::new(p).take())
+                .and_then(|p| (*p).take::<Vxp>())
             {
                 None => InitResult::Pass,
-                Some(p) => InitResult::Ok(p),
+                Some(p) => InitResult::Ok(*p),
             }
         }
     }
 }
 
-impl VDP for VXP {
-    fn name() -> &'static str {
+impl VDP for Vxp {
+    fn name() -> &'static CStr {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx, _oc: *mut ffi::objcore) -> InitResult<VXP> {
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx) -> InitResult<Vxp> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
@@ -260,7 +260,7 @@ impl VDP for VXP {
             ffi::http_Unset((*vdp_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
         }
 
-        VXP::new(vrt_ctx)
+        Vxp::new(vrt_ctx)
     }
 
     fn push(&mut self, ctx: &mut VDPCtx, act: PushAction, buf: &[u8]) -> PushResult {
@@ -280,8 +280,8 @@ impl VDP for VXP {
     }
 }
 
-impl VFP for VXP {
-    fn name() -> &'static str {
+impl VFP for Vxp {
+    fn name() -> &'static CStr {
         NAME
     }
 
@@ -290,7 +290,7 @@ impl VFP for VXP {
             ffi::http_Unset(vdp_ctx.raw.resp, ffi::H_Content_Length.as_ptr());
         }
 
-        VXP::new(vrt_ctx)
+        Vxp::new(vrt_ctx)
     }
 
     fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
@@ -330,3 +330,9 @@ impl VFP for VXP {
         }
     }
 }
+
+static PRIV_VXP_METHODS: vmod_priv_methods = vmod_priv_methods {
+    magic: VMOD_PRIV_METHODS_MAGIC,
+    type_: c"VXP type".as_ptr(),
+    fini: Some(vmod_priv::on_fini::<Vxp>),
+};

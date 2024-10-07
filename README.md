@@ -8,7 +8,7 @@ As usual, the full VCL API is described in [vmod.vcc](vmod.vcc), and if you need
 
 ## VCL Example
 
-``` bash
+```bash
 import rers;
 
 sub vcl_init {
@@ -53,7 +53,7 @@ Depending on which `varnish` version tou are targeting, select the right `vmod_r
 
 With `cargo` only:
 
-``` bash
+```bash
 cargo build --release
 cargo test --release
 ```
@@ -62,7 +62,7 @@ The vmod file will be found at `target/release/libvmod_rs_template.so`.
 
 Alternatively, if you have `jq` and `rst2man`, you can use `build.sh`
 
-``` bash
+```bash
 ./build.sh [OUTDIR]
 ```
 
@@ -75,7 +75,7 @@ To avoid making a mess of your system, you probably should install your vmod as 
 ### All platforms
 
 First it's necessary to set the `VMOD_VERSION` (the version of this vmod) and `VARNISH_VERSION` (the Varnish version to build against) environment variables. It can be done manually, or using `cargo` and `jq`:
-``` bash
+```bash
 VMOD_VERSION=$(cargo metadata --no-deps --format-version 1 | jq '.packages[0].version' -r)
 VARNISH_MINOR=$(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "varnish-sys") | .metadata.libvarnishapi.version ')
 VARNISH_PATCH=0
@@ -88,7 +88,7 @@ VARNISH_VERSION=7.0.0
 
 Then create the dist tarball, for example using `git archive`:
 
-``` bash
+```bash
 git archive --output=vmod_rs_template-$VMOD_VERSION.tar.gz --format=tar.gz HEAD
 ```
 
@@ -96,7 +96,7 @@ Then, follow distribution-specific instructions.
 
 ### Arch
 
-``` bash
+```bash
 # create a work directory
 mkdir build
 # copy the tarball and PKGBUILD file, substituing the variables we care about
@@ -114,7 +114,7 @@ Your package will be the file with the `.pkg.tar.zst` extension in `build/`
 
 Alpine needs a bit of setup on the first time, but the [documentation](https://wiki.alpinelinux.org/wiki/Creating_an_Alpine_package) is excellent.
 
-``` bash
+```bash
 # install some packages, create a user, give it power and a key
 apk add -q --no-progress --update tar alpine-sdk sudo
 adduser -D builder
@@ -125,7 +125,7 @@ su builder -c "abuild-keygen -nai"
 
 Then, to actually build your package:
 
-``` bash
+```bash
 # create a work directory
 mkdir build
 # copy the tarball and PKGBUIL file, substituing the variables we care about
