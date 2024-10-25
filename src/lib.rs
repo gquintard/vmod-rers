@@ -251,13 +251,13 @@ impl VDP for Vxp {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VDPCtx) -> InitResult<Vxp> {
+    fn new(vrt_ctx: &mut Ctx, _: &mut VDPCtx) -> InitResult<Vxp> {
         // we don't know how/if the body will be modified, so we nuke the content-length
         // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
         unsafe {
-            let req = vdp_ctx.raw.req.as_ref().unwrap();
+            let req = vrt_ctx.raw.req.as_ref().unwrap();
             assert_eq!(req.magic, ffi::REQ_MAGIC);
-            ffi::http_Unset((*vdp_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
+            ffi::http_Unset((*vrt_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
         }
 
         Vxp::new(vrt_ctx)
