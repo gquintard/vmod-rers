@@ -5,9 +5,9 @@ use std::sync::Mutex;
 
 use lru::LruCache;
 use regex::bytes::Regex;
-use varnish::vcl::{Ctx, InitResult, PullResult, PushAction, PushResult, VDPCtx, VFPCtx, VDP, VFP};
+use varnish::vcl::{Ctx, InitResult, PullResult, PushResult, VDPCtx, VFPCtx, VDP, VFP};
 use varnish::{ffi, run_vtc_tests};
-use varnish_sys::ffi::{vmod_priv, vmod_priv_methods, VMOD_PRIV_METHODS_MAGIC};
+use varnish_sys::ffi::{vmod_priv, vmod_priv_methods, VdpAction, VMOD_PRIV_METHODS_MAGIC};
 
 run_vtc_tests!("tests/*.vtc");
 
@@ -220,6 +220,9 @@ pub struct Captures<'a> {
 }
 
 // cheat: this is not exposed, but we know it exists
+// Compiler bug: https://github.com/rust-lang/rust-clippy/pull/9948#discussion_r1821113636
+// In the future Rust versions this `expect` should be removed
+#[expect(improper_ctypes)]
 extern "C" {
     pub fn THR_GetBusyobj() -> *mut ffi::busyobj;
     pub fn THR_GetRequest() -> *mut ffi::req;
@@ -263,10 +266,10 @@ impl VDP for Vxp {
         Vxp::new(vrt_ctx)
     }
 
-    fn push(&mut self, ctx: &mut VDPCtx, act: PushAction, buf: &[u8]) -> PushResult {
+    fn push(&mut self, ctx: &mut VDPCtx, act: VdpAction, buf: &[u8]) -> PushResult {
         self.body.extend_from_slice(buf);
 
-        if !matches!(act, PushAction::End) {
+        if !matches!(act, VdpAction::End) {
             return PushResult::Ok;
         }
         let mut replaced_body = Cow::from(&self.body);
