@@ -5,9 +5,12 @@ use std::sync::Mutex;
 
 use lru::LruCache;
 use regex::bytes::Regex;
-use varnish::vcl::{Ctx, InitResult, PullResult, PushResult, VDPCtx, VFPCtx, VDP, VFP};
-use varnish::{ffi, run_vtc_tests};
-use varnish_sys::ffi::{vmod_priv, vmod_priv_methods, VdpAction, VMOD_PRIV_METHODS_MAGIC};
+use varnish::ffi::{self, vmod_priv, vmod_priv_methods, VdpAction, VMOD_PRIV_METHODS_MAGIC};
+use varnish::run_vtc_tests;
+use varnish::vcl::{
+    Ctx, DeliveryProcCtx, DeliveryProcessor, FetchProcCtx, FetchProcessor, InitResult, PullResult,
+    PushResult,
+};
 
 run_vtc_tests!("tests/*.vtc");
 
@@ -219,15 +222,6 @@ pub struct Captures<'a> {
     slice: Option<&'a [u8]>,
 }
 
-// cheat: this is not exposed, but we know it exists
-// Compiler bug: https://github.com/rust-lang/rust-clippy/pull/9948#discussion_r1821113636
-// In the future Rust versions this `expect` should be removed
-#[expect(improper_ctypes)]
-extern "C" {
-    pub fn THR_GetBusyobj() -> *mut ffi::busyobj;
-    pub fn THR_GetRequest() -> *mut ffi::req;
-}
-
 #[derive(Default)]
 struct Vxp {
     steps: Vec<(Regex, String)>,
@@ -249,24 +243,20 @@ impl Vxp {
     }
 }
 
-impl VDP for Vxp {
+impl DeliveryProcessor for Vxp {
     fn name() -> &'static CStr {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, _: &mut VDPCtx) -> InitResult<Vxp> {
+    fn new(vrt_ctx: &mut Ctx, _vdp_ctx: &mut DeliveryProcCtx) -> InitResult<Vxp> {
         // we don't know how/if the body will be modified, so we nuke the content-length
-        // it's also not worth fleshing out a rust object just to remove a header, we just use the C functions
-        unsafe {
-            let req = vrt_ctx.raw.req.as_ref().unwrap();
-            assert_eq!(req.magic, ffi::REQ_MAGIC);
-            ffi::http_Unset((*vrt_ctx.raw.req).resp, ffi::H_Content_Length.as_ptr());
-        }
+        let resp = vrt_ctx.http_resp.as_mut().unwrap();
+        resp.unset_header("Content-Length");
 
         Vxp::new(vrt_ctx)
     }
 
-    fn push(&mut self, ctx: &mut VDPCtx, act: VdpAction, buf: &[u8]) -> PushResult {
+    fn push(&mut self, ctx: &mut DeliveryProcCtx, act: VdpAction, buf: &[u8]) -> PushResult {
         self.body.extend_from_slice(buf);
 
         if !matches!(act, VdpAction::End) {
@@ -279,16 +269,16 @@ impl VDP for Vxp {
                 replaced_body = Cow::from(s);
             }
         }
-        ctx.push(act, &replaced_body)
+ctx.push(act, &replaced_body)
     }
 }
 
-impl VFP for Vxp {
+impl FetchProcessor for Vxp {
     fn name() -> &'static CStr {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut VFPCtx) -> InitResult<Self> {
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut FetchProcCtx) -> InitResult<Self> {
         unsafe {
             ffi::http_Unset(vdp_ctx.raw.resp, ffi::H_Content_Length.as_ptr());
         }
@@ -296,7 +286,7 @@ impl VFP for Vxp {
         Vxp::new(vrt_ctx)
     }
 
-    fn pull(&mut self, ctx: &mut VFPCtx, buf: &mut [u8]) -> PullResult {
+    fn pull(&mut self, ctx: &mut FetchProcCtx, buf: &mut [u8]) -> PullResult {
         // first pull everything, using buf to receive the initial data before extending our body vector
         while self.sent.is_none() {
             match ctx.pull(buf) {

@@ -1,14 +1,12 @@
 [package]
 name = "vmod_rers"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2021"
 
 [dependencies]
 lru = "0.7.1"
 regex = "1.5"
-varnish = { git = "https://github.com/gquintard/varnish-rs.git" }
-varnish-macros = { git = "https://github.com/gquintard/varnish-rs.git" }
-varnish-sys = { git = "https://github.com/gquintard/varnish-rs.git" }
+varnish = { version = "0.1.0", features = ["ffi"] }
 
 [lib]
 crate-type = ["cdylib"]
