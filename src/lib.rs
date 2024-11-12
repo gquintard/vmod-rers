@@ -269,7 +269,7 @@ impl DeliveryProcessor for Vxp {
                 replaced_body = Cow::from(s);
             }
         }
-ctx.push(act, &replaced_body)
+        ctx.push(act, &replaced_body)
     }
 }
 
