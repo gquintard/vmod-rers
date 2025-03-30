@@ -14,7 +14,10 @@ use varnish::vcl::{
 
 run_vtc_tests!("tests/*.vtc");
 
-#[varnish::vmod]
+/// General note: all functions in this vmod will silently fail if given an invalid
+/// regex, which means that `.is_match()` and `.capture()` will always return false,
+/// and replace will be a noop.
+#[varnish::vmod(docs = "API.md")]
 mod rers {
     use std::cmp::max;
     use std::error::Error;
@@ -29,6 +32,10 @@ mod rers {
     use super::{init, Captures, Vxp, PRIV_ANCHOR, PRIV_VXP_METHODS};
 
     impl init {
+        /// Build a regex store, optionally specifying its size `n` (defaults to 100). The
+        /// cache is a standard LRU cache, meaning that if we try to compile/access a regex
+        /// that wouldn't fit in it, it will remove the Least Recently Used regex to make
+        /// space for the newcomer.
         pub fn new(#[default(1000)] cache_size: i64) -> Self {
             let cache_size = max(0, cache_size) as usize;
             init {
@@ -36,12 +43,15 @@ mod rers {
             }
         }
 
+        /// Return `true` if `regex` matches on `s`
         pub fn is_match(&self, s: &str, res: &str) -> bool {
             self.get_regex(res)
                 .map(|re| re.is_match(s.as_bytes()))
                 .unwrap_or(false)
         }
 
+        /// Replace all groups matching `regex` in `s` with `sub`. If `lim` is specified,
+        /// only the first `lim` groups are replaced.
         pub fn replace(
             &self,
             haystack: &str,
@@ -57,6 +67,8 @@ mod rers {
                 .map(|s| s.to_owned())
         }
 
+        /// Equivalent to `is_match()`, but remembers the captured groups so you can access
+        /// them with `group()` later on.
         pub fn capture_req_body(
             &self,
             ctx: &mut Ctx,
@@ -96,6 +108,10 @@ mod rers {
             }
         }
 
+        /// Same as `.capture()` but works on the request body. The request must have been
+        /// cached first (using `std.cache_req_body()` for example) or the call will fail
+        /// and interrupt the VCL transaction. If the request body isn't valid utf8, the
+        /// function will simply return `false`.
         pub fn capture<'a>(
             &self,
             #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
@@ -119,6 +135,9 @@ mod rers {
             true
         }
 
+        /// Return a captured group (from `capture()` or `capture_req_body()`) using its
+        /// `index` or its `name`. Trying to access an non-existing group will return an
+        /// empty string.
         pub fn group<'a>(
             &self,
             #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
@@ -130,6 +149,9 @@ mod rers {
                 .map(|m| m.as_bytes())
         }
 
+        /// Return a captured (named) group (from `capture()` or `capture_req_body()`) using its
+        /// `index` or its `name`. Trying to access an non-existing group will return an
+        /// empty string.
         pub fn named_group<'a>(
             &self,
             #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
@@ -140,6 +162,10 @@ mod rers {
                 .map(|m| m.as_bytes())
         }
 
+        /// Add a regex/substitute pair to use when delivering the response body to a
+        /// client. Note that you will need to include `rers` in `resp.filters` for it to
+        /// have an effect. This function can be called multiple times, with each pair being
+        /// called sequentially.
         pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
             let Ok(re) = self
                 .get_regex(res)
