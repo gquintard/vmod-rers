@@ -250,7 +250,7 @@ impl DeliveryProcessor for Vxp {
 
     fn new(vrt_ctx: &mut Ctx, _vdp_ctx: &mut DeliveryProcCtx) -> InitResult<Vxp> {
         // we don't know how/if the body will be modified, so we nuke the content-length
-        let resp = vrt_ctx.http_resp.as_mut().unwrap();
+        let resp = vrt_ctx.http_resp.as_mut().or_else(|| vrt_ctx.http_beresp.as_mut()).unwrap();
         resp.unset_header("Content-Length");
 
         Vxp::new(vrt_ctx)
@@ -278,10 +278,10 @@ impl FetchProcessor for Vxp {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut FetchProcCtx) -> InitResult<Self> {
-        unsafe {
-            ffi::http_Unset(vdp_ctx.raw.resp, ffi::H_Content_Length.as_ptr());
-        }
+    fn new(vrt_ctx: &mut Ctx, _: &mut FetchProcCtx) -> InitResult<Self> {
+        // we don't know how/if the body will be modified, so we nuke the content-length
+        let resp = vrt_ctx.http_resp.as_mut().or_else(|| vrt_ctx.http_beresp.as_mut()).unwrap();
+        resp.unset_header("Content-Length");
 
         Vxp::new(vrt_ctx)
     }
