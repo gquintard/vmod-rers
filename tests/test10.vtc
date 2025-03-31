@@ -1,0 +1,35 @@
+varnishtest "replace_resp_body on the backend side"
+
+server s1 {
+	rxreq
+	expect req.body == "CCC"
+	txresp
+} -start
+
+varnish v1 -arg "-p thread_pool_stack=160k" -vcl+backend {
+	import std;
+	import rers from "${vmod}";
+
+	sub vcl_init {
+		new re_cache = rers.init(2);
+	}
+
+	sub vcl_recv {
+		re_cache.replace_req_body("A", "B");
+		set req.filters = "rers";
+		std.cache_req_body(100B);
+		return (pass);
+	}
+
+	sub vcl_backend_fetch {
+		re_cache.replace_req_body("BB", "C");
+		set bereq.filters = "rers";
+	}
+} -start
+varnish v1 -cliok "param.set debug +syncvsl"
+
+client c1 {
+	txreq -method "POST" -body "AAA"
+	rxresp
+	expect resp.status == 200
+} -run
