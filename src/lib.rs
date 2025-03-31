@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp::max;
 use std::ffi::CStr;
 use std::os::raw::c_void;
 use std::sync::Mutex;
@@ -8,8 +9,8 @@ use regex::bytes::Regex;
 use varnish::ffi::{self, vmod_priv, vmod_priv_methods, VdpAction, VMOD_PRIV_METHODS_MAGIC};
 use varnish::run_vtc_tests;
 use varnish::vcl::{
-    Ctx, DeliveryProcCtx, DeliveryProcessor, FetchProcCtx, FetchProcessor, InitResult, PullResult,
-    PushResult,
+    Ctx, DeliveryProcCtx, DeliveryProcessor, FetchProcCtx, FetchProcessor, InitResult, LogTag,
+    PullResult, PushResult,
 };
 
 run_vtc_tests!("tests/*.vtc");
@@ -27,9 +28,9 @@ mod rers {
 
     use lru::LruCache;
     use varnish::ffi::{self, vdp, vfp};
-    use varnish::vcl::{new_vdp, new_vfp, Ctx, Event, LogTag};
+    use varnish::vcl::{new_vdp, new_vfp, Ctx, Event};
 
-    use super::{init, Captures, Vxp, PRIV_ANCHOR, PRIV_VXP_METHODS};
+    use super::{init, Captures, Direction, Vxp};
 
     impl init {
         /// Build a regex store, optionally specifying its size `n` (defaults to 100). The
@@ -57,9 +58,9 @@ mod rers {
             haystack: &str,
             res: &str,
             sub: &str,
-            limit: Option<i64>,
+            #[default(0)] limit: i64,
         ) -> Result<String, String> {
-            let limit = max(0, limit.unwrap_or(0)) as usize;
+            let limit = max(0, limit) as usize;
             let re = self.get_regex(res)?;
             let repl = re.replacen(haystack.as_bytes(), limit, sub.as_bytes());
             from_utf8(repl.as_ref())
@@ -163,40 +164,41 @@ mod rers {
         }
 
         /// Add a regex/substitute pair to use when delivering the response body to a
-        /// client. Note that you will need to include `rers` in `resp.filters` for it to
+        /// client, or ingesting a body from the backend.
+        /// Note that you will need to include `rers` in `resp.filters` for it to
         /// have an effect. This function can be called multiple times, with each pair being
         /// called sequentially.
-        pub fn replace_resp_body(&self, ctx: &mut Ctx, res: &str, sub: &str) {
-            let Ok(re) = self
-                .get_regex(res)
-                .map_err(|e| ctx.log(LogTag::VclError, &e))
-            else {
-                return; // FIXME: should this return an error to call VRT_fail()?
-            };
-
-            let priv_opt = unsafe { ffi::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
-            let Some(priv_opt) = priv_opt else {
-                ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
-                return;
-            };
-
-            // Low level access: convert pointer into a Box, manipulate it, and store it back
-            let vp = unsafe { (*priv_opt).take::<Vxp>() };
-            let value = (re, sub.to_owned());
-            let ri = if let Some(mut ri) = vp {
-                ri.steps.push(value);
-                ri
+        pub fn replace_resp_body(
+            &self,
+            ctx: &mut Ctx,
+            res: &str,
+            sub: &str,
+            #[default(0)] limit: i64,
+        ) {
+            let direction = if ctx.http_req.is_some() {
+                Direction::Deliver
             } else {
-                Box::new(Vxp {
-                    body: Vec::new(),
-                    steps: vec![value],
-                    sent: None,
-                })
+                Direction::Fetch
             };
-            unsafe {
-                (*priv_opt).put(ri, &PRIV_VXP_METHODS);
-            }
+            self.replace_body(ctx, res, sub, limit, direction)
         }
+
+        //        /// Add a regex/substitute pair to use when ingesting the response body from a
+        //        /// client, or delivering a body from the backend.
+        //        /// Note that you will need to include `rers` in `resp.filters` for it to
+        //        /// have an effect. This function can be called multiple times, with each pair being
+        //        /// called sequentially.
+        //        pub fn replace_req_body(&self, ctx: &mut Ctx, res: &str, sub: &str,
+        //            #[default(0)]
+        //            limit: i64,
+        //            ) {
+        //            let direction = if ctx.http_req.is_some() {
+        //                Direction::Fetch
+        //            } else {
+        //                Direction::Deliver
+        //            };
+        //            self.replace_body(ctx, res,sub, limit, direction)
+        //        }
     }
 
     #[event]
@@ -230,6 +232,38 @@ impl init {
         }
         lru.get(res).unwrap().clone()
     }
+    fn replace_body(&self, ctx: &mut Ctx, res: &str, sub: &str, limit: i64, dir: Direction) {
+        let limit = max(0, limit) as usize;
+        let Ok(re) = self
+            .get_regex(res)
+            .map_err(|e| ctx.log(LogTag::VclError, &e))
+        else {
+            return; // FIXME: should this return an error to call VRT_fail()?
+        };
+
+        let priv_opt = unsafe { ffi::VRT_priv_task(ctx.raw, PRIV_ANCHOR).as_mut() };
+        let Some(priv_opt) = priv_opt else {
+            ctx.fail("rers: couldn't retrieve priv_task (workspace too small?)");
+            return;
+        };
+
+        // Low level access: convert pointer into a Box, manipulate it, and store it back
+        let vp = unsafe { (*priv_opt).take::<Vxp>() };
+        let value = (dir, re, sub.to_owned(), limit);
+        let ri = if let Some(mut ri) = vp {
+            ri.steps.push(value);
+            ri
+        } else {
+            Box::new(Vxp {
+                body: Vec::new(),
+                steps: vec![value],
+                sent: None,
+            })
+        };
+        unsafe {
+            (*priv_opt).put(ri, &PRIV_VXP_METHODS);
+        }
+    }
 }
 
 #[allow(non_camel_case_types)]
@@ -248,9 +282,13 @@ pub struct Captures<'a> {
     slice: Option<&'a [u8]>,
 }
 
-#[derive(Default)]
+enum Direction {
+    Fetch,
+    Deliver,
+}
+
 struct Vxp {
-    steps: Vec<(Regex, String)>,
+    steps: Vec<(Direction, Regex, String, usize)>,
     body: Vec<u8>,
     sent: Option<usize>,
 }
@@ -274,10 +312,28 @@ impl DeliveryProcessor for Vxp {
         NAME
     }
 
-    fn new(vrt_ctx: &mut Ctx, _vdp_ctx: &mut DeliveryProcCtx) -> InitResult<Vxp> {
-        // we don't know how/if the body will be modified, so we nuke the content-length
-        let resp = vrt_ctx.http_resp.as_mut().or_else(|| vrt_ctx.http_beresp.as_mut()).unwrap();
-        resp.unset_header("Content-Length");
+    fn new(vrt_ctx: &mut Ctx, vdp_ctx: &mut DeliveryProcCtx) -> InitResult<Vxp> {
+        unsafe {
+            let mut rm_cl = false;
+            if vrt_ctx.raw.bo.as_ref().is_some() {
+                if vrt_ctx.raw.bo.as_ref().unwrap().bereq_body.is_null() {
+                    *vdp_ctx.raw.clen = -1;
+                    rm_cl = true;
+                }
+            } else {
+                rm_cl = true;
+            }
+
+            if rm_cl {
+                // we don't know how/if the body will be modified, so we nuke the content-length
+                let resp = vrt_ctx
+                    .http_resp
+                    .as_mut()
+                    .or(vrt_ctx.http_bereq.as_mut())
+                    .unwrap();
+                resp.unset_header("Content-Length");
+            }
+        }
 
         Vxp::new(vrt_ctx)
     }
@@ -289,9 +345,12 @@ impl DeliveryProcessor for Vxp {
             return PushResult::Ok;
         }
         let mut replaced_body = Cow::from(&self.body);
-        for (re, sub) in &self.steps {
+        for (dir, re, sub, limit) in &self.steps {
+            if !matches!(dir, Direction::Deliver) {
+                continue;
+            }
             // ignore the `Cow::Borrowed` case, it means nothing changed
-            if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
+            if let Cow::Owned(s) = re.replacen(&replaced_body, *limit, sub.as_bytes()) {
                 replaced_body = Cow::from(s);
             }
         }
@@ -306,8 +365,9 @@ impl FetchProcessor for Vxp {
 
     fn new(vrt_ctx: &mut Ctx, _: &mut FetchProcCtx) -> InitResult<Self> {
         // we don't know how/if the body will be modified, so we nuke the content-length
-        let resp = vrt_ctx.http_resp.as_mut().or_else(|| vrt_ctx.http_beresp.as_mut()).unwrap();
-        resp.unset_header("Content-Length");
+        if let Some(headers) = vrt_ctx.http_beresp.as_mut() {
+            headers.unset_header("Content-Length");
+        }
 
         Vxp::new(vrt_ctx)
     }
@@ -317,15 +377,20 @@ impl FetchProcessor for Vxp {
         while self.sent.is_none() {
             match ctx.pull(buf) {
                 PullResult::Err => return PullResult::Err,
-                PullResult::Ok(sz) => self.body.extend_from_slice(&buf[..sz]),
+                PullResult::Ok(sz) => {
+                    self.body.extend_from_slice(&buf[..sz]);
+                }
                 PullResult::End(sz) => {
                     self.body.extend_from_slice(&buf[..sz]);
                     // same trick as for VDP, we run all our regex, but this time we'll revert the
                     // body back into a vector for the next times we are called
                     let mut replaced_body = Cow::from(&self.body);
-                    for (re, sub) in &self.steps {
+                    for (dir, re, sub, limit) in &self.steps {
+                        if !matches!(dir, Direction::Fetch) {
+                            continue;
+                        }
                         // ignore the `Cow::Borrowed` case, it means nothing changed
-                        if let Cow::Owned(s) = re.replace(&replaced_body, sub.as_bytes()) {
+                        if let Cow::Owned(s) = re.replacen(&replaced_body, *limit, sub.as_bytes()) {
                             replaced_body = Cow::from(s);
                         }
                     }

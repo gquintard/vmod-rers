@@ -32,7 +32,7 @@ space for the newcomer.
 
 Return `true` if `regex` matches on `s`
 
-#### Method `STRING <object>.replace(STRING haystack, STRING res, STRING sub, [INT limit])`
+#### Method `STRING <object>.replace(STRING haystack, STRING res, STRING sub, INT limit = 0)`
 
 Replace all groups matching `regex` in `s` with `sub`. If `lim` is specified,
 only the first `lim` groups are replaced.
@@ -61,9 +61,10 @@ Return a captured (named) group (from `capture()` or `capture_req_body()`) using
 `index` or its `name`. Trying to access an non-existing group will return an
 empty string.
 
-#### Method `VOID <object>.replace_resp_body(STRING res, STRING sub)`
+#### Method `VOID <object>.replace_resp_body(STRING res, STRING sub, INT limit = 0)`
 
 Add a regex/substitute pair to use when delivering the response body to a
-client. Note that you will need to include `rers` in `resp.filters` for it to
+client, or ingesting a body from the backend.
+Note that you will need to include `rers` in `resp.filters` for it to
 have an effect. This function can be called multiple times, with each pair being
 called sequentially.
