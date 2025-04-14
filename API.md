@@ -23,10 +23,11 @@ import rers from "path/to/librers.so";
 
 ### Constructor `rers.init(INT cache_size = 1000)`
 
-Build a regex store, optionally specifying its size `n` (defaults to 100). The
+Build a regex store, optionally specifying its size `n` (defaults to 1000). The
 cache is a standard LRU cache, meaning that if we try to compile/access a regex
 that wouldn't fit in it, it will remove the Least Recently Used regex to make
 space for the newcomer.
+`n` will be clamped between 1 and `usize::MAX`.
 
 #### Method `BOOL <object>.is_match(STRING s, STRING res)`
 
@@ -52,13 +53,13 @@ function will simply return `false`.
 #### Method `STRING <object>.group(INT n)`
 
 Return a captured group (from `capture()` or `capture_req_body()`) using its
-`index` or its `name`. Trying to access an non-existing group will return an
+`index` or its `name`. Trying to access a non-existing group will return an
 empty string.
 
 #### Method `STRING <object>.named_group(STRING name)`
 
 Return a captured (named) group (from `capture()` or `capture_req_body()`) using its
-`index` or its `name`. Trying to access an non-existing group will return an
+`index` or its `name`. Trying to access a non-existing group will return an
 empty string.
 
 #### Method `VOID <object>.replace_resp_body(STRING res, STRING sub, INT limit = 0)`

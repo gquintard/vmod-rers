@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cmp::max;
 use std::ffi::CStr;
 use std::os::raw::c_void;
 use std::sync::Mutex;
@@ -20,8 +19,8 @@ run_vtc_tests!("tests/*.vtc");
 /// and replace will be a noop.
 #[varnish::vmod(docs = "API.md")]
 mod rers {
-    use std::cmp::max;
     use std::error::Error;
+    use std::num::NonZeroUsize;
     use std::slice;
     use std::str::from_utf8;
     use std::sync::Mutex;
@@ -30,17 +29,20 @@ mod rers {
     use varnish::ffi::{self, vdp, vfp};
     use varnish::vcl::{new_vdp, new_vfp, Ctx, Event};
 
-    use super::{init, Captures, Direction, Vxp};
+    use super::{clamp_i64_to_usize, init, Captures, Direction, Vxp};
 
     impl init {
-        /// Build a regex store, optionally specifying its size `n` (defaults to 100). The
+        /// Build a regex store, optionally specifying its size `n` (defaults to 1000). The
         /// cache is a standard LRU cache, meaning that if we try to compile/access a regex
         /// that wouldn't fit in it, it will remove the Least Recently Used regex to make
         /// space for the newcomer.
+        /// `n` will be clamped between 1 and `usize::MAX`.
+        #[must_use]
         pub fn new(#[default(1000)] cache_size: i64) -> Self {
-            let cache_size = max(0, cache_size) as usize;
+            let cap =
+                NonZeroUsize::new(clamp_i64_to_usize(cache_size)).unwrap_or(NonZeroUsize::MIN);
             init {
-                mutexed_cache: Mutex::new(LruCache::new(cache_size)),
+                mutexed_cache: Mutex::new(LruCache::new(cap)),
             }
         }
 
@@ -60,12 +62,15 @@ mod rers {
             sub: &str,
             #[default(0)] limit: i64,
         ) -> Result<String, String> {
-            let limit = max(0, limit) as usize;
             let re = self.get_regex(res)?;
-            let repl = re.replacen(haystack.as_bytes(), limit, sub.as_bytes());
+            let repl = re.replacen(
+                haystack.as_bytes(),
+                clamp_i64_to_usize(limit),
+                sub.as_bytes(),
+            );
             from_utf8(repl.as_ref())
                 .map_err(|e| e.to_string())
-                .map(|s| s.to_owned())
+                .map(ToOwned::to_owned)
         }
 
         /// Equivalent to `is_match()`, but remembers the captured groups so you can access
@@ -76,9 +81,8 @@ mod rers {
             #[shared_per_task] vp: &mut Option<Box<Captures<'_>>>,
             res: &str,
         ) -> Result<bool, Box<dyn Error>> {
-            let re = match self.get_regex(res) {
-                Err(_) => return Ok(false),
-                Ok(re) => re,
+            let Ok(re) = self.get_regex(res) else {
+                return Ok(false);
             };
 
             // we need a contiguous buffer to present to the regex, so we coalesce the cached body
@@ -119,14 +123,12 @@ mod rers {
             s: &'a str,
             res: &str,
         ) -> bool {
-            let re = match self.get_regex(res) {
-                Err(_) => return false,
-                Ok(re) => re,
+            let Ok(re) = self.get_regex(res) else {
+                return false;
             };
 
-            let caps = match re.captures(s.as_bytes()) {
-                None => return false,
-                Some(caps) => caps,
+            let Some(caps) = re.captures(s.as_bytes()) else {
+                return false;
             };
             *vp = Some(Box::new(Captures {
                 caps,
@@ -137,22 +139,23 @@ mod rers {
         }
 
         /// Return a captured group (from `capture()` or `capture_req_body()`) using its
-        /// `index` or its `name`. Trying to access an non-existing group will return an
+        /// `index` or its `name`. Trying to access a non-existing group will return an
         /// empty string.
+        #[allow(clippy::unused_self)] // TODO: figure out why &self is not being used
         pub fn group<'a>(
             &self,
             #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
             n: i64,
         ) -> Option<&'a [u8]> {
-            let n = if n >= 0 { n } else { 0 } as usize;
             vp.as_ref()
-                .and_then(|c| c.caps.get(n))
+                .and_then(|c| c.caps.get(clamp_i64_to_usize(n)))
                 .map(|m| m.as_bytes())
         }
 
         /// Return a captured (named) group (from `capture()` or `capture_req_body()`) using its
-        /// `index` or its `name`. Trying to access an non-existing group will return an
+        /// `index` or its `name`. Trying to access a non-existing group will return an
         /// empty string.
+        #[allow(clippy::unused_self)] // TODO: figure out why &self is not being used
         pub fn named_group<'a>(
             &self,
             #[shared_per_task] vp: &mut Option<Box<Captures<'a>>>,
@@ -180,7 +183,7 @@ mod rers {
             } else {
                 Direction::Fetch
             };
-            self.replace_body(ctx, res, sub, limit, direction)
+            self.replace_body(ctx, res, sub, limit, direction);
         }
 
         //        /// Add a regex/substitute pair to use when ingesting the response body from a
@@ -202,11 +205,7 @@ mod rers {
     }
 
     #[event]
-    pub fn event(
-        ctx: &mut Ctx,
-        #[shared_per_vcl] vp: &mut Option<Box<(vfp, vdp)>>,
-        event: Event,
-    ) -> Result<(), String> {
+    pub fn event(ctx: &mut Ctx, #[shared_per_vcl] vp: &mut Option<Box<(vfp, vdp)>>, event: Event) {
         match event {
             Event::Load => {
                 *vp = Some(Box::new((new_vfp::<Vxp>(), new_vdp::<Vxp>())));
@@ -219,7 +218,6 @@ mod rers {
             },
             _ => {}
         }
-        Ok(())
     }
 }
 
@@ -233,7 +231,6 @@ impl init {
         lru.get(res).unwrap().clone()
     }
     fn replace_body(&self, ctx: &mut Ctx, res: &str, sub: &str, limit: i64, dir: Direction) {
-        let limit = max(0, limit) as usize;
         let Ok(re) = self
             .get_regex(res)
             .map_err(|e| ctx.log(LogTag::VclError, &e))
@@ -249,7 +246,7 @@ impl init {
 
         // Low level access: convert pointer into a Box, manipulate it, and store it back
         let vp = unsafe { (*priv_opt).take::<Vxp>() };
-        let value = (dir, re, sub.to_owned(), limit);
+        let value = (dir, re, sub.to_owned(), clamp_i64_to_usize(limit));
         let ri = if let Some(mut ri) = vp {
             ri.steps.push(value);
             ri
@@ -271,7 +268,7 @@ pub struct init {
     mutexed_cache: Mutex<LruCache<String, Result<Regex, String>>>,
 }
 
-const PRIV_ANCHOR: *const c_void = [0].as_ptr() as *const c_void;
+const PRIV_ANCHOR: *const c_void = [0].as_ptr().cast::<c_void>();
 const NAME: &CStr = c"rers";
 
 pub struct Captures<'a> {
@@ -420,3 +417,9 @@ static PRIV_VXP_METHODS: vmod_priv_methods = vmod_priv_methods {
     type_: c"VXP type".as_ptr(),
     fini: Some(vmod_priv::on_fini::<Vxp>),
 };
+
+/// Convert an i64 to a `usize`, clamping it between zero to the maximum value of usize
+pub(crate) fn clamp_i64_to_usize(value: i64) -> usize {
+    // If i64 is bigger than usize, return usize::MAX, otherwise any positive i64 will fit within usize
+    usize::try_from(value).unwrap_or(if value < 0 { 0 } else { usize::MAX })
+}
