@@ -90,8 +90,6 @@ docker-run-ver VERSION *ARGS:
 docker-run-latest *ARGS: (docker-build-ver "latest") (docker-run-ver "latest" ARGS)
 docker-run-77 *ARGS: (docker-build-ver "77") (docker-run-ver "77" ARGS)
 docker-run-76 *ARGS: (docker-build-ver "76") (docker-run-ver "76" ARGS)
-docker-run-75 *ARGS: (docker-build-ver "75") (docker-run-ver "75" ARGS)
-docker-run-74 *ARGS: (docker-build-ver "74") (docker-run-ver "74" ARGS)
 docker-run-60 *ARGS: (docker-build-ver "60lts") (docker-run-ver "60lts" ARGS)
 
 # Install Varnish from packagecloud.io. This could be damaging to your system - use with caution.
